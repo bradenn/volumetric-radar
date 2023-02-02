@@ -25,21 +25,28 @@ Persistent::Persistent() {
 }
 
 // Write a string to non-volatile storage
-void Persistent::writeString(char *key, char *value) const {
-    ESP_ERROR_CHECK(nvs_set_str(handle, key, value));
+void Persistent::writeString(const string &key, const string &value) const {
+    ESP_ERROR_CHECK(nvs_set_str(handle, key.c_str(), value.c_str()));
 }
 
-// Read a string from non-volatile storage. Resulting string must be freed by caller.
-char* Persistent::readString(char *key) const {
+// Read a string from non-volatile storage
+string Persistent::readString(const string &key) const {
     size_t stringSize = 0;
     // Find the length of the contained string if it exists
-    ESP_ERROR_CHECK(nvs_get_str(handle, key, nullptr, &stringSize));
+    ESP_ERROR_CHECK(nvs_get_str(handle, key.c_str(), nullptr, &stringSize));
+    if(stringSize <= 0) {
+        return "unset";
+    }
     // Allocate memory to contain the target string
     char *out = static_cast<char *>(malloc(sizeof(char) * stringSize));
     // Read the string from nvs into the out variable
-    ESP_ERROR_CHECK(nvs_get_str(handle, key, out, &stringSize));
-    // Return the string pointer, which will need to be freed eventually by the caller
-    return out;
+    ESP_ERROR_CHECK(nvs_get_str(handle, key.c_str(), out, &stringSize));
+    // Convert to a c++ string
+    auto output = string(out);
+    // Free the buffer
+    free(out);
+    // Return the string pointer
+    return output;
 }
 
 

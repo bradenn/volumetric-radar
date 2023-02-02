@@ -6,7 +6,10 @@
 #define RADAR_AP_H
 
 
-class AccessPoint{
+class AccessPoint {
+
+public:
+    AccessPoint();
 
 };
 

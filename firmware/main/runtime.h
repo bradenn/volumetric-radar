@@ -8,13 +8,25 @@
 
 #include "persistent.h"
 
+enum RuntimeState {
+    INITIALIZE = 0,
+    SETUP = 1,
+    CONNECTING = 2,
+    RUNNING = 3,
+};
+
 class Runtime {
 
 public:
     Runtime();
+
     ~Runtime();
 
 private:
+
+    RuntimeState state{};
+
+    bool isNetworkConfigured();
 
     Persistent *persistent;
 

@@ -5,14 +5,17 @@
 #ifndef RADAR_PERSISTENT_H
 #define RADAR_PERSISTENT_H
 
+#include "string"
+
+using std::string;
 
 class Persistent {
 public:
     Persistent();
 
-    void writeString(char *key, char *value) const;
+    void writeString(const string &key, const string &value) const;
 
-    char *readString(char *str) const;
+    string readString(const string &str) const;
 
 private:
     nvs_handle_t handle{};
