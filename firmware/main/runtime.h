@@ -6,7 +6,18 @@
 #define RADAR_RUNTIME_H
 
 
-class Runtime{
+#include "persistent.h"
+
+class Runtime {
+
+public:
+    Runtime();
+    ~Runtime();
+
+private:
+
+    Persistent *persistent;
+
 
 };
 

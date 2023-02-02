@@ -3,3 +3,15 @@
 //
 
 #include "runtime.h"
+
+Runtime::Runtime() {
+    // Initialize the non-volatile storage manager
+    persistent = new Persistent();
+
+}
+
+Runtime::~Runtime() {
+
+    delete persistent;
+
+}
