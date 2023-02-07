@@ -3,7 +3,7 @@
 //
 
 #include <esp_err.h>
-#include <nvs_flash.h>
+
 #include "persistent.h"
 
 // Persistent constructor initializes the non-volatile storage subsystem
@@ -25,28 +25,24 @@ Persistent::Persistent() {
 }
 
 // Write a string to non-volatile storage
-void Persistent::writeString(const string &key, const string &value) const {
-    ESP_ERROR_CHECK(nvs_set_str(handle, key.c_str(), value.c_str()));
+void Persistent::writeString(char *key, char* value) const {
+    ESP_ERROR_CHECK(nvs_set_str(handle, key, value));
 }
 
 // Read a string from non-volatile storage
-string Persistent::readString(const string &key) const {
+char * Persistent::readString(char *key) const {
     size_t stringSize = 0;
     // Find the length of the contained string if it exists
-    ESP_ERROR_CHECK(nvs_get_str(handle, key.c_str(), nullptr, &stringSize));
-    if(stringSize <= 0) {
+    esp_err_t err = nvs_get_str(handle, key, nullptr, &stringSize);
+    if(stringSize <= 0 || err == ESP_ERR_NVS_NOT_FOUND) {
         return "unset";
     }
     // Allocate memory to contain the target string
     char *out = static_cast<char *>(malloc(sizeof(char) * stringSize));
     // Read the string from nvs into the out variable
-    ESP_ERROR_CHECK(nvs_get_str(handle, key.c_str(), out, &stringSize));
-    // Convert to a c++ string
-    auto output = string(out);
-    // Free the buffer
-    free(out);
+    ESP_ERROR_CHECK(nvs_get_str(handle, key, out, &stringSize));
     // Return the string pointer
-    return output;
+    return out;
 }
 
 

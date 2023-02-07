@@ -5,8 +5,13 @@
 #ifndef RADAR_RUNTIME_H
 #define RADAR_RUNTIME_H
 
-
+#include <cstring>
+#include <esp_netif.h>
+#include <esp_event.h>
+#include "adc.h"
+#include "network.h"
 #include "persistent.h"
+
 
 enum RuntimeState {
     INITIALIZE = 0,
@@ -22,13 +27,11 @@ public:
 
     ~Runtime();
 
+
 private:
 
     RuntimeState state{};
-
-    bool isNetworkConfigured();
-
-    Persistent *persistent;
+    Persistent persistent{};
 
 
 };

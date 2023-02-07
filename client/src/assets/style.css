@@ -1,0 +1,101 @@
+body {
+    font-family: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+    background-color: #000;
+    color: #fff;
+}
+
+.menu {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+}
+.menu-bar {
+    display: flex;
+    justify-content: space-between;
+    align-content: center;
+    align-items: center;
+    background-color: rgba(28,28,30,1);
+    width: calc(100% - 2rem);
+    border-radius: 12px;
+    height: 4rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+}
+
+.menu-option {
+    display: flex;
+    flex-direction: column;
+    align-content: center;
+    justify-content: center;
+
+    gap: 2px;
+
+
+    font-size: 1.1rem;
+    font-weight: 400;
+
+}
+
+.menu-option div:first-child {
+    font-weight: 600;
+}
+.menu-option div:not(:first-child) {
+    opacity: 0.6;
+    font-size: 0.9rem;
+}
+
+.accent {
+    color: rgba(255, 149, 1);
+}
+
+.header {
+    display: flex;
+    flex-direction: column;
+    align-content: center;
+    justify-content: center;
+}
+
+.center {
+    display: flex;
+    justify-content: center;
+    flex-direction: column;
+    align-items: center;
+    margin-top:0.5rem;
+}
+a {
+    text-decoration: none;
+    color: white !important;
+}
+.gg-chevron-right {
+    box-sizing: border-box;
+    position: relative;
+    display: block;
+    transform: scale(1);
+    width: 22px;
+    height: 22px;
+    border: 2px solid transparent;
+    border-radius: 100px
+}
+
+.gg-chevron-right::after {
+    content: "";
+    display: block;
+    box-sizing: border-box;
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    border-bottom: 2px solid;
+    border-right: 2px solid;
+    transform: rotate(-45deg);
+    right: 6px;
+    top: 4px
+}
+.subtext {
+    color: rgba(255, 149, 1, 0.8);
+    font-size: 0.9rem;
+}

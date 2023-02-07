@@ -4,21 +4,19 @@
 
 #ifndef RADAR_PERSISTENT_H
 #define RADAR_PERSISTENT_H
+#include <nvs_flash.h>
 
-#include "string"
-
-using std::string;
 
 class Persistent {
 public:
     Persistent();
 
-    void writeString(const string &key, const string &value) const;
+    void writeString(char *key, char *value) const;
 
-    string readString(const string &str) const;
+    char * readString(char *str) const;
 
 private:
-    nvs_handle_t handle{};
+    nvs_handle_t handle = 0;
 
 };
 
