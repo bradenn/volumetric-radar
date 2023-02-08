@@ -25,3 +25,9 @@ The project is divided into the four following components:
 ### Client
 
 ### Bridge
+
+---
+
+**Copyright &copy; Braden Nicholson 2023**
+
+This project is available for reference purposes only and may not be copied, distributed, or used for commercial purposes without the express permission of the author. Please respect the time and effort that went into creating this project.
