@@ -1,4 +1,4 @@
-<script setup lang="ts">
+<script lang="ts" setup>
 
 
 import {onMounted, onUnmounted, reactive} from "vue";
@@ -6,8 +6,9 @@ import {v4 as uuidv4} from "uuid";
 
 interface Datatype {
   name: string
-  values: number[]
-  fft: boolean
+  spectrum: number[]
+  frequencies: number[]
+  lut: number[]
 }
 
 let props = defineProps<Datatype>();
@@ -92,9 +93,9 @@ function draw() {
   ctx.stroke()
   ctx.closePath()
 
-  let scale = 25;
+  let scale = w / props.spectrum.length;
 
-  for (let i = 0; i < w / scale; i++) {
+  for (let i = 0; i < props.spectrum.length; i++) {
     ctx.beginPath()
     ctx.moveTo(i * scale, h / 1.25 - 2)
     ctx.lineTo(i * scale, h / 1.25 + 2)
@@ -103,7 +104,7 @@ function draw() {
   }
 
 
-  drawPattern(ctx, props.values, -1, false)
+  drawPattern(ctx, props.spectrum, -1, false)
   let mapAvg = new Map<number, number>()
   let depth = 0
   // for (const hKey in state.lastFew) {
@@ -114,24 +115,6 @@ function draw() {
   //     mapAvg.set(i, arr[i] + (mapAvg.get(i) || 0));
   //   }
   // }
-
-
-  if (props.fft) {
-    // let ou = [] as number[]
-    // mapAvg.forEach(a => ou.push(a))
-    // let m = Math.max(...ou)
-
-    // let arr = matchedFilter(ou.slice(1), [0.25, 0.5, 0.25]);
-    // ctx.beginPath()
-    // drawPattern(ctx, arr.map(v => (v)), -1, false)
-    // ctx.closePath()
-    // ctx.stroke()
-    //
-    // state.lastFew.push(props.values)
-    // if (state.lastFew.length > 4) {
-    //   state.lastFew = state.lastFew.slice(1)
-    // }
-  }
 }
 
 
@@ -162,82 +145,56 @@ function findLocalMaximas(arr: number[], threshold: number): number[] {
 
 function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: number, useRelative: boolean) {
 
-  // values = matchedFilter(values, [0.5,0.75,0.5])
   let minY = 0
   let maxY = 50
   minY = Math.min(...values);
   state.min = Math.round(minY * 100) / 100;
   maxY = Math.max(...values);
   state.max = Math.round(maxY * 100) / 100;
-  let begin = 0
-  let slope = 0
-  let ls = 0
-
-  //
-  //
-  // values = values.slice(mxs[0])
-  // if (useRelative) {
-  //   minY = 0
-  //   maxY = 10
-  // }
-
-  if (props.fft == true) {
-    state.top = []
-    state.top = findLocalMaximas(values, maxY / 4)
-    let masterPoll = 128000;
-    let subSample = 32;
-    let freq = masterPoll / subSample;
-    let window = 1024;
-    state.top = state.top.map(v => Math.round(((v) * (freq / window)) * 1) / 1).filter(v => v != 0)
-    // state.top = state.top.sort((a, b) => b - a).map(v => values.indexOf(v))
-  }
-
-
-  ctx.lineWidth = 1
-  ctx.strokeStyle = 'rgba(10, 128, 255, 1)';
-  ctx.fillStyle = 'rgba(10, 128, 255, 0.25)';
 
   let w = ctx.canvas.width;
   let h = ctx.canvas.height;
 
   let lastX = 0;
   let mass = w / (values.length)
+  ctx.lineWidth = mass / 1.25
 
   let lastY = map_range(values[0], minY, maxY, h / 1.25, h / 1.25 - (ctx.canvas.height) / 1.5);
   ctx.beginPath()
   for (let i = 1; i < values.length; i++) {
     let x = i * mass;
     let y = map_range(values[i], minY, maxY, h / 1.25, h / 1.25 - (ctx.canvas.height) / 1.5)
+    let clr = map_range(values[i], minY, maxY, 1, 0.25)
+    ctx.strokeStyle = `rgba(10, 128, 255, ${clr})`;
     let divs = 1
-    ctx.moveTo(lastX, lastY)
+    ctx.moveTo(x, h / 1.25)
     ctx.lineTo(x, y)
     lastX = x;
     lastY = y;
   }
 
+
+  state.top = props.frequencies.map(f => props.lut[f])
+
   ctx.closePath()
   ctx.stroke()
   ctx.fill()
-  // ctx.beginPath()
-  // // let mxs = findLocalMaximas(matchedFilter(values, [0.5,0.75,0.75,0.5]), 20)
-  //
-  // for (let i = 1; i < mxs.length; i++) {
-  //   let x = mxs[i] * mass;
-  //   let y = map_range(values[mxs[i]], minY, maxY, h / 1.25, h / 1.25-(ctx.canvas.height) / 1.5)
-  //   let divs = 1
-  //   // ctx.moveTo(lastX, lastY)
-  //   ctx.moveTo(x, h / 1.25)
-  //   ctx.lineTo(x, y)
-  //
-  // }
-  // ctx.closePath()
-  // ctx.stroke()
-  // for (let i = 0; i < values.length; i++) {
-  //
-  //   // lastX = x;
-  //   // lastY = y
-  // }
+  ctx.fillStyle = 'rgba(255,255,255, 0.75)';
+  ctx.strokeStyle = 'rgba(255,255,255, 0.25)';
+  ctx.font = "20px JetBrains Mono"
+  for (let i = 0; i < props.frequencies.length; i++) {
+    let ln = `${Math.round(props.lut[props.frequencies[i]] * 10) / 10}Hz`;
+    let mt = ctx.measureText(ln);
+    let x = props.frequencies[i] * mass
+    ctx.beginPath()
+    ctx.moveTo(x, h / 1.25 + 6)
+    ctx.lineTo(x, h / 1.25 + mt.fontBoundingBoxAscent / 2)
+    ctx.stroke()
+    ctx.closePath()
 
+
+    ctx.fillText(ln, x - mt.width / 2, h / 1.25 + mt.fontBoundingBoxAscent * 1.75)
+  }
 
 }
 
@@ -248,20 +205,11 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: num
     <h1></h1>
     <div class="canvas-group element">
 
-      <div style="height: 2rem" class="d-flex gap-1 justify-content-between w-100">
+      <div class="d-flex gap-1 justify-content-between w-100" style="height: 2rem">
         <div class="d-flex gap-2 label d-flex flex-row align-items-center px-2">{{ props.name }} <span
-            class="text-muted">0-{{ props.values.length }}</span></div>
+            class="text-muted">0-{{ props.spectrum.length }}</span></div>
         <div class="d-flex gap-1 ">
-          <div class="d-flex gap-2 tag label">
-            <div>􀆇</div>
-            <div>{{ state.max }}</div>
-          </div>
-          <div class="d-flex gap-2 tag label">
-            <div>􀆈</div>
-            <div>{{ state.min }}</div>
-          </div>
-          <div v-if="props.fft"></div>
-          <div v-for="i in state.top.slice(0,5)" v-if="props.fft" class="d-flex gap-2 tag tag label">
+          <div v-for="i in state.top.slice(0,5)" class="d-flex gap-2 tag tag label">
             <div>Freq.</div>
             <div>{{ i }} Hz</div>
           </div>

@@ -1,12 +1,12 @@
-<script setup lang="ts">
-
+<script lang="ts" setup>
 
 import {onMounted, onUnmounted, reactive} from "vue";
 import {v4 as uuidv4} from "uuid";
 
 interface Datatype {
   name: string
-  values: number[]
+  r: number[]
+  t: number[]
   fft: boolean
 }
 
@@ -102,8 +102,8 @@ function draw() {
     ctx.closePath()
   }
 
-
-  drawPattern(ctx, props.values, -1, false)
+  drawPattern(ctx, props.t, props.r, -1, false)
+  ctx.beginPath()
   let mapAvg = new Map<number, number>()
   let depth = 0
   // for (const hKey in state.lastFew) {
@@ -114,7 +114,8 @@ function draw() {
   //     mapAvg.set(i, arr[i] + (mapAvg.get(i) || 0));
   //   }
   // }
-
+  ctx.closePath()
+  ctx.stroke()
 
   if (props.fft) {
     // let ou = [] as number[]
@@ -126,7 +127,7 @@ function draw() {
     // drawPattern(ctx, arr.map(v => (v)), -1, false)
     // ctx.closePath()
     // ctx.stroke()
-    //
+
     // state.lastFew.push(props.values)
     // if (state.lastFew.length > 4) {
     //   state.lastFew = state.lastFew.slice(1)
@@ -160,19 +161,19 @@ function findLocalMaximas(arr: number[], threshold: number): number[] {
   return maximas;
 }
 
-function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: number, useRelative: boolean) {
+function drawPattern(ctx: CanvasRenderingContext2D, t: number[], r: number[], depth: number, useRelative: boolean) {
 
-  // values = matchedFilter(values, [0.5,0.75,0.5])
+  // values = matchedFilter(values, [0.25,0.5,0.75,0.5,0.25])
   let minY = 0
   let maxY = 50
-  minY = Math.min(...values);
+  minY = Math.min(...r);
   state.min = Math.round(minY * 100) / 100;
-  maxY = Math.max(...values);
+  maxY = Math.max(...r);
   state.max = Math.round(maxY * 100) / 100;
   let begin = 0
   let slope = 0
   let ls = 0
-
+  // let mxs = findLocalMaximas(values, 20)
   //
   //
   // values = values.slice(mxs[0])
@@ -181,57 +182,25 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: num
   //   maxY = 10
   // }
 
-  if (props.fft == true) {
-    state.top = []
-    state.top = findLocalMaximas(values, maxY / 4)
-    let masterPoll = 128000;
-    let subSample = 32;
-    let freq = masterPoll / subSample;
-    let window = 1024;
-    state.top = state.top.map(v => Math.round(((v) * (freq / window)) * 1) / 1).filter(v => v != 0)
-    // state.top = state.top.sort((a, b) => b - a).map(v => values.indexOf(v))
-  }
-
 
   ctx.lineWidth = 1
-  ctx.strokeStyle = 'rgba(10, 128, 255, 1)';
-  ctx.fillStyle = 'rgba(10, 128, 255, 0.25)';
+  ctx.strokeStyle = 'rgba(255, 128, 0, 0.5)';
 
   let w = ctx.canvas.width;
   let h = ctx.canvas.height;
 
-  let lastX = 0;
-  let mass = w / (values.length)
-
-  let lastY = map_range(values[0], minY, maxY, h / 1.25, h / 1.25 - (ctx.canvas.height) / 1.5);
+  let divisions = 128;
+  let slice = (Math.PI * 2) / divisions
   ctx.beginPath()
-  for (let i = 1; i < values.length; i++) {
-    let x = i * mass;
-    let y = map_range(values[i], minY, maxY, h / 1.25, h / 1.25 - (ctx.canvas.height) / 1.5)
-    let divs = 1
-    ctx.moveTo(lastX, lastY)
-    ctx.lineTo(x, y)
-    lastX = x;
-    lastY = y;
-  }
+  for (let i = 0; i < t.length; i++) {
+    let x = Math.cos(t[i] / Math.PI) * map_range(r[i], minY, maxY, 0, w / 8)
+    let y = Math.sin(t[i] / Math.PI) * map_range(r[i], minY, maxY, 0, w / 8)
+    ctx.moveTo(w / 2, h / 2);
+    ctx.lineTo(w / 2 + x, h / 2 + y);
 
+  }
   ctx.closePath()
   ctx.stroke()
-  ctx.fill()
-  // ctx.beginPath()
-  // // let mxs = findLocalMaximas(matchedFilter(values, [0.5,0.75,0.75,0.5]), 20)
-  //
-  // for (let i = 1; i < mxs.length; i++) {
-  //   let x = mxs[i] * mass;
-  //   let y = map_range(values[mxs[i]], minY, maxY, h / 1.25, h / 1.25-(ctx.canvas.height) / 1.5)
-  //   let divs = 1
-  //   // ctx.moveTo(lastX, lastY)
-  //   ctx.moveTo(x, h / 1.25)
-  //   ctx.lineTo(x, y)
-  //
-  // }
-  // ctx.closePath()
-  // ctx.stroke()
   // for (let i = 0; i < values.length; i++) {
   //
   //   // lastX = x;
@@ -248,9 +217,9 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: num
     <h1></h1>
     <div class="canvas-group element">
 
-      <div style="height: 2rem" class="d-flex gap-1 justify-content-between w-100">
+      <div class="d-flex gap-1 justify-content-between w-100" style="height: 2rem">
         <div class="d-flex gap-2 label d-flex flex-row align-items-center px-2">{{ props.name }} <span
-            class="text-muted">0-{{ props.values.length }}</span></div>
+            class="text-muted"></span></div>
         <div class="d-flex gap-1 ">
           <div class="d-flex gap-2 tag label">
             <div>􀆇</div>
@@ -261,7 +230,7 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: num
             <div>{{ state.min }}</div>
           </div>
           <div v-if="props.fft"></div>
-          <div v-for="i in state.top.slice(0,5)" v-if="props.fft" class="d-flex gap-2 tag tag label">
+          <div v-for="i in state.top.slice(0,3)" v-if="props.fft" class="d-flex gap-2 tag tag label">
             <div>Freq.</div>
             <div>{{ i }} Hz</div>
           </div>

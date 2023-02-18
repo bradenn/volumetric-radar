@@ -1,35 +1,42 @@
 <script setup lang="ts">
 
 
-import {onMounted, onUnmounted, reactive, watchEffect} from "vue";
+import {onMounted, onUnmounted, reactive} from "vue";
+import Wave from "@/views/spectrum/Wave.vue";
+import Polar from "@/components/Polar.vue";
+import FFT from "@/views/spectrum/FFT.vue";
 
 
 interface Datatype {
-  values: number[]
+  ch0?: number[]
+  payload: string
+  waiting?: number
 }
 
 const state = reactive({
   socket: {} as WebSocket,
-  data: [] as Datatype[],
+  data: {} as Datatype,
   canvas: {} as HTMLCanvasElement,
-  ctx: {} as CanvasRenderingContext2D
+  ch0: [] as number[],
+  ch1: [] as number[],
+  ch2: [] as number[],
+  last: 0,
+  lastUpdate: 0,
+  out: "",
+  waiting: 0,
+  ctx: {} as CanvasRenderingContext2D,
+  connected: false,
+  frequencies: [] as number[]
 })
 
 onMounted(() => {
   connect()
-
-  configureCanvas()
-  draw();
 })
 
 onUnmounted(() => {
 
 })
 
-watchEffect(() => {
- draw()
-  return state.data
-})
 
 function close() {
   state.socket.close();
@@ -37,7 +44,7 @@ function close() {
 
 function connect() {
 
-  let ws = new WebSocket("ws://10.0.1.85/ws")
+  let ws = new WebSocket("ws://10.0.1.11:5500/")
 
   ws.onopen = wsConnect;
   ws.onmessage = wsMessage;
@@ -46,54 +53,6 @@ function connect() {
   state.socket = ws
 
 }
-
-function configureCanvas() {
-  const _canvas = document.getElementById(`signal`)
-  state.canvas = _canvas as HTMLCanvasElement
-  state.ctx = state.canvas.getContext("2d") as CanvasRenderingContext2D
-  let scale = 1
-  state.ctx.scale(scale, scale)
-
-  state.canvas.width = state.canvas.clientWidth * scale
-  state.canvas.height = state.canvas.clientHeight * scale
-
-  draw()
-}
-
-function draw() {
-  let ctx = state.ctx;
-  if (!ctx.canvas) return
-  ctx.lineWidth = 2
-  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-  // drawLegend()
-  let w = ctx.canvas.width;
-  let h = ctx.canvas.height;
-  ctx.strokeStyle = "rgba(255,255,255,0.125)";
-  ctx.beginPath()
-  ctx.moveTo(0, h / 1.25)
-  ctx.lineTo(w, h / 1.25)
-  ctx.stroke()
-  ctx.closePath()
-
-  let scale = 25;
-
-  for (let i = 0; i < w / scale; i++) {
-    ctx.beginPath()
-    ctx.moveTo(i * scale, h / 1.25 - 2)
-    ctx.lineTo(i * scale, h / 1.25 + 2)
-    ctx.stroke()
-    ctx.closePath()
-  }
-
-  ctx.beginPath()
-  for (let i = 0; i < state.data.length; i++) {
-    drawPattern(ctx, state.data[i].values, i)
-  }
-  ctx.closePath()
-  ctx.stroke()
-
-}
-
 
 function map_range(value: number, low1: number, high1: number, low2: number, high2: number) {
   return low2 + (high2 - low2) * (value - low1) / (high1 - low1);
@@ -104,40 +63,57 @@ interface POS {
   y: number
 }
 
-function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: number) {
-
-
-  let minY = Math.min(...values);
-  let maxY = Math.max(...values) + 1;
-  ctx.fillStyle = "rgba(255,255,255,0.25)";
-  ctx.lineWidth = 1
-  ctx.strokeStyle = depth == 0?`rgba(255, 128, 0, 0.5)`:`rgba(0, 128, 255, 0.5)`;
-  let w = ctx.canvas.width;
-  let h = ctx.canvas.height;
-
-
-  // ctx.moveTo(0, h / 1.25 - (values[0] - minY) / (maxY - minY) * (ctx.canvas.height) / 1.5)
-  let lastX = 0;
-  let lastY = h / 1.25 - (values[0] - minY) / (maxY - minY) * (ctx.canvas.height) / 1.5;
-  let mass = w / (values.length)
-  for (let i = 0; i < values.length; i++) {
-    let x = i * mass;
-    let y = h / 1.25 - (values[(values.length - 1) - i] - minY) / (maxY - minY) * (ctx.canvas.height) / 1.5
-    ctx.moveTo(lastX, lastY)
-    ctx.lineTo(x, y)
-    lastX = x;
-    lastY = y
-  }
-
-
-}
 
 function wsConnect(e: Event) {
-  state.socket.send("Ping!")
+  // state.socket.send("Ping!")
+  state.connected = true
+}
+
+function hexStringToUint32(hex: string): number {
+  return parseInt(hex, 16);
+}
+
+function unpackArray(hexString: string): number[] {
+  const packedValues: number[] = [];
+  for (let i = 0; i < hexString.length; i += 8) {
+    const packedValue = hexStringToUint32(hexString.substr(i, 8));
+    const value1 = packedValue & 0xffff;
+    const value2 = (packedValue >> 16) & 0xffff;
+    packedValues.push(value2, value1);
+  }
+  return packedValues;
 }
 
 function wsMessage(e: MessageEvent) {
-  state.data = JSON.parse(e.data) as Datatype[]
+  state.data = {} as Datatype
+  state.last = Date.now() - state.lastUpdate
+  state.lastUpdate = Date.now()
+  state.data = JSON.parse(e.data) as Datatype
+  state.waiting = 0
+  // console.log(state.data)
+
+  // state.out = state.data.payload.length;
+  // return
+
+  // let out = unpackArray(state.data.payload);
+  let obj = JSON.parse(state.data.payload) as {
+    t?: number[]
+    r?: number[],
+    k?: number[],
+    frequencies?: number[],
+  }
+  state.ch0 = []
+  state.ch1 = []
+  state.ch2 = []
+  state.frequencies = []
+  state.ch1 = obj.t || []
+  state.ch0 = obj.k || []
+  state.ch2 = obj.r || []
+  state.frequencies = obj.frequencies || []
+  // if (state.data.ch1) {
+  //   state.ch1 = [];
+  //   state.ch1 = state.data.ch1;
+  // }
 }
 
 function wsClose(e: Event) {
@@ -147,29 +123,21 @@ function wsClose(e: Event) {
 </script>
 
 <template>
-  <h1>Socket Data:</h1>
-  <div class="canvas-container ">
-
-    <canvas :id="`signal`" class="inner-canvas"></canvas>
+  {{ state.last }} - {{ state.waiting }} {{ state.connected }}
+  <h2>Channel 0</h2>
+  <div class="tool-grid">
+    <Polar delta="80" name="Horizontal"></Polar>
+    <Polar :landscape="true" delta="34" name="Vertical"></Polar>
   </div>
+  <FFT :frequencies="state.frequencies" :lut="state.ch1" :spectrum="state.ch0" name="FFT"></FFT>
+  <Wave :fft="false" :values="state.ch2" name="Signal"></Wave>
+  <!--  <Polar :r="state.ch0" :t="state.ch1" name="Input" :fft="false"></Polar>-->
 </template>
 
-<style>
-.inner-canvas {
-  width: 100%;
-  height: 100%;
-
-}
-
-.canvas-container {
-  display: flex;
-  flex-direction: row;
-  justify-content: center;
-  width: 100%;
-  height: 12rem;
-  align-items: center;
-  border-radius: 8px;
-  background-color: hsla(214, 9%, 28%, 0.2);
-  padding: 6px
+<style scoped>
+.tool-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(20rem, 1fr));
+  gap: 0.5rem;
 }
 </style>
