@@ -31,7 +31,6 @@ public:
 private:
 
     RuntimeState state{};
-    Persistent persistent{};
 
 
 };

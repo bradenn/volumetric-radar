@@ -9,15 +9,23 @@
 
 class Persistent {
 public:
-    Persistent();
 
-    void writeString(char *key, char *value) const;
+    static Persistent &instance();
 
-    char * readString(char *str) const;
+    Persistent(const Persistent &) = default;
+
+
+    Persistent &operator=(const Persistent &) = delete;
+
+
+
+    void writeString(const char *key, const char *value) const;
+
+    void readString(const char *key, char *dest) const;
 
 private:
     nvs_handle_t handle = 0;
-
+    Persistent();
 };
 
 

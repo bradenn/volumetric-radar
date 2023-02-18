@@ -52,17 +52,46 @@ body {
     align-content: center;
     justify-content: center;
 }
+
 .center {
     display: flex;
     justify-content: center;
     flex-direction: column;
     align-items: center;
-    margin-top:0.5rem;
+    margin-top: 0.5rem;
 }
+
+input[type=password] {
+    display: inline-block;
+    box-sizing: border-box;
+    background-color: rgba(28, 28, 30, 1);
+    width: 100%;
+    border-radius: 12px;
+    height: 3rem;
+    padding: 6px 8px;
+    color: white;
+}
+
+input[type=submit] {
+    width: 100%;
+    background-color: rgba(28, 28, 30, 1);
+    color: rgba(255, 149, 1);
+    padding: 8px 12px;
+    height: 4rem;
+    margin: 8px 0;
+    border-radius: 12px;
+    cursor: pointer;
+}
+
+input[type=submit]:hover {
+    background-color: #45a049;
+}
+
 a {
     text-decoration: none;
     color: white !important;
 }
+
 .gg-chevron-right {
     box-sizing: border-box;
     position: relative;

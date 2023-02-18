@@ -18,11 +18,13 @@ Runtime::Runtime() {
     // Initialize the event loop
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     // Initialize the non-volatile storage manager
-    persistent = Persistent();
+    Persistent p = Persistent::instance();
     // Determine whether the system should enter softAP setup mode or station connection mode
-    char *ssid = persistent.readString(NVS_KEY_SSID);
-    char *passwd = persistent.readString(NVS_KEY_PASSWD);
-    auto net = Network();
+    char ssid[33];
+    p.readString(NVS_KEY_SSID, ssid);
+    char passwd[33];
+    p.readString(NVS_KEY_PASSWD, passwd);
+    auto net = Network::instance();
     esp_err_t err;
     if (strcmp("unset", ssid) == 0) {
         state = SETUP;
@@ -35,11 +37,13 @@ Runtime::Runtime() {
         state = CONNECTING;
         err = net.startSTA({.ssid = ssid, .passwd = passwd});
         if (err != ESP_OK) {
-            printf("Network::AP initialization failed. (%s)\n", esp_err_to_name(err));
+            printf("Network::STA initialization failed. (%s)\n", esp_err_to_name(err));
             return;
         }
-    }
+        printf("Connected\n");
 
+        Server();
+    }
 
 }
 

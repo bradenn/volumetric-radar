@@ -13,6 +13,7 @@
 #include <vector>
 #include <freertos/event_groups.h>
 #include "network.h"
+#include <lwip/netdb.h>
 #include "runtime.h"
 
 #define AP_HTML_SETUP_START "_binary_style_css_start"
@@ -21,6 +22,10 @@
 #define NETWORK_WIFI_RECONNECTS 5
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
+
+static bool Connected = false;
+
+
 using std::string;
 
 
@@ -193,11 +198,12 @@ static esp_err_t connectIndex(httpd_req_t *req) {
                 class="header"><h1>vRadar</h1>)";
     oss << "</div>";
 
+    bool reboot = false;
     if (httpd_query_key_value(query, "passwd", pass, querySize) == ESP_ERR_NOT_FOUND) {
         oss << "<div class='title'>Enter the password for '" << out << "'</div>";
         oss << "<form action='/connect' method='get'> <input type='hidden' id='ssid' name='ssid' "
                "value='" << out << "'/><input type='password' id='passwd' name='passwd'></input>";
-        oss << "<input type='submit' value='submit' id='submit' name='submit' value='submit'/>";
+        oss << "<input type='submit' value='submit' id='submit' name='submit' value='Connect'/>";
         oss << "</form>";
     } else {
         Network *n = &Network::instance();
@@ -206,8 +212,11 @@ static esp_err_t connectIndex(httpd_req_t *req) {
             oss << "<div class='title'>WRONG PASSWORD for '" << out << "'</div>";
 
         } else {
+            Persistent::instance().writeString("ssid", out);
+            Persistent::instance().writeString("passwd", pass);
+            reboot = true;
             oss << "<div class='title'>Connected to '" << out << "'</div>";
-
+            oss << "<div>This network will now be disabled. Please continue from your selected network.</div>";
         }
     }
 
@@ -227,6 +236,9 @@ static esp_err_t connectIndex(httpd_req_t *req) {
     // Send the status OK code
     httpd_resp_set_status(req, HTTPD_200);
     free(query);
+    if(reboot) {
+        esp_restart();
+    }
     return ESP_OK;
 }
 
@@ -330,6 +342,13 @@ static const httpd_uri_t connectGet = {
         .user_ctx = nullptr,
 };
 
+static const httpd_uri_t hotspotGet = {
+        .uri       = "/hotspot-detect.html",
+        .method    = HTTP_GET,
+        .handler   = portalIndex,
+        .user_ctx = nullptr,
+};
+
 
 void httpServer(void *params) {
 
@@ -347,54 +366,159 @@ void httpServer(void *params) {
     httpd_register_uri_handler(server, &connectGet);
     httpd_register_uri_handler(server, &jsonGetConnect);
     httpd_register_uri_handler(server, &jsonGetList);
+    httpd_register_uri_handler(server, &hotspotGet);
 
 }
 
+ip4_addr_t resolve_ip;
+
+void dnsCleanup(int socket) {
+    if(socket != -1) {
+        shutdown(socket, 0);
+        close(socket);
+        socket = -1;
+    }
+}
+#define SRV_HEADER_SIZE           12
+#define SRV_QUESTION_MAX_LENGTH   50
 void dnsServer(void *params) {
 
+    uint8_t rx[128];
 
-    esp_ip4_addr_t apIp;
-    inet_pton(AF_INET, AP_IP, &apIp);
+    while (1) {
+        struct sockaddr_in dest{
+                .sin_family = AF_INET,
+                .sin_port = htons(53),
+                .sin_addr {
+                        .s_addr = htonl(INADDR_ANY),
+                },
+        };
 
-    // Open UDP socket to communicate with devices
-    int sFd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sFd < 0) {
-        printf("Failed to open socket\n");
-        exit(0);
+        int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+
+        if (sock < 0) {
+            printf("Socket creation failed...\n");
+            break;
+        }
+        int err = bind(sock, (struct sockaddr *) &dest, sizeof(dest));
+        if (err < 0) {
+            printf("Socket bind failed... (%d)\n", err);
+            break;
+        }
+
+        while (1) {
+            struct sockaddr_in sockAddr;
+            socklen_t sockLen = sizeof(sockAddr);
+
+            memset(rx, 0x00, sizeof(rx));
+
+            int len = recvfrom(sock, rx, sizeof(rx), 0, (struct sockaddr *) &sockAddr, &sockLen);
+
+            if (len < 0) {
+                printf("Socket read failed.\n");
+                break;
+            }
+
+            if (len > SRV_HEADER_SIZE + SRV_QUESTION_MAX_LENGTH) {
+                printf("Read overflow\n");
+                continue;
+            }
+
+            rx[sizeof(rx) - 1] = '\0';
+
+            auto *t = (DnsHeader *) rx;
+
+            t->QR = 1;
+            t->OPCODE = 0;
+            t->AA = 1;
+            t->RCODE = 0;
+            t->TC = 0;
+            t->Z = 0;
+            t->RA = 0;
+            t->ANCOUNT = t->QDCOUNT;
+            t->NSCOUNT = 0;
+            t->ARCOUNT = 0;
+
+            uint8_t *query = rx + sizeof(DnsHeader);
+
+            // Skip QNAME
+            while (*query++);
+
+            // Skip QTYPE
+            query += 2;
+
+            // Skip QCLASS
+            query += 2;
+
+            auto *response = (DnsResponse *) query;
+
+            response->NAME = __bswap16(0xC00C);
+            response->TYPE = __bswap16(1);
+            response->CLASS = __bswap16(1);
+            response->TTL = 0;
+            response->RDLENGTH = __bswap16(4);
+            response->RDATA = resolve_ip.addr;
+
+            query += sizeof(DnsResponse);
+            err = sendto(sock, rx, query - rx, 0, (struct sockaddr *) &sockAddr, sizeof(sockAddr));
+            if (err < 0) {
+                printf("Send failed. (%d)\n", err);
+                break;
+            }
+            taskYIELD();
+        }
+        dnsCleanup(sock);
+
     }
 
-    struct sockaddr_in listen{};
-    listen.sin_family = AF_INET;
-    listen.sin_addr.s_addr = (in_addr_t) AP_IP;
-    if (bind(sFd, (struct sockaddr *) &listen, sizeof(struct sockaddr_in)) < 0) {
-        printf("Failed to bind to port 53\n");
-        close(sFd);
-        exit(1);
-    }
+
+//    esp_ip4_addr_t apIp;
+//    inet_pton(AF_INET, AP_IP, &apIp);
+//
+//    // Open UDP socket to communicate with devices
+//    int sFd = socket(AF_INET, SOCK_DGRAM, 0);
+//    if (sFd < 0) {
+//        printf("Failed to open socket\n");
+//        exit(0);
+//    }
+//
+//    struct sockaddr_in listen{};
+//    listen.sin_family = AF_INET;
+//    listen.sin_addr.s_addr = (in_addr_t) AP_IP;
+//    if (bind(sFd, (struct sockaddr *) &listen, sizeof(struct sockaddr_in)) < 0) {
+//        printf("Failed to bind to port 53\n");
+//        close(sFd);
+//        exit(1);
+//    }
 
 
 }
 
-static EventGroupHandle_t wifiEventGroup;
+
+//static EventGroupHandle_t wifiEventGroup;
 static int reconnectAttempts = 0;
 
 #define MAC_STR_FMT "%02x:%02x:%02x:%02x:%02x:%02x"
 #define IP_STR_FMT "%d.%d.%d.%d"
 
 static void wifi_event_handler(void *arg, esp_event_base_t eventBase, int32_t eventId, void *event_data) {
-    auto *network = (Network *) arg;
     if (eventBase == WIFI_EVENT) {
         switch (eventId) {
             case WIFI_EVENT_STA_START:
-                esp_wifi_connect();
+                ESP_ERROR_CHECK(esp_wifi_connect());
+                printf("Wi-Fi Station mode activated...\n");
                 break;
+            case WIFI_EVENT_STA_CONNECTED:
+                printf("Connected to network!\n");
             case WIFI_EVENT_STA_DISCONNECTED:
+                printf("Disconnected!\n");
+                Connected = false;
                 if (reconnectAttempts < NETWORK_WIFI_RECONNECTS) {
                     esp_wifi_connect();
                     reconnectAttempts++;
                     printf("Attempting to reconnect... (%d/%d)\n", reconnectAttempts, NETWORK_WIFI_RECONNECTS);
                 } else {
-                    xEventGroupSetBits(wifiEventGroup, WIFI_FAIL_BIT);
+//                    xEventGroupSetBits(wifiEventGroup, WIFI_FAIL_BIT);
                 }
                 break;
             case WIFI_EVENT_AP_STACONNECTED: {
@@ -420,7 +544,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t eventBase, int32_t ev
                 auto *ipEvent = (ip_event_got_ip_t *) event_data;
                 printf("Assigned DHCP IP: (" IP_STR_FMT ") \n", IP2STR(&ipEvent->ip_info.ip));
                 reconnectAttempts = 0;
-                xEventGroupSetBits(wifiEventGroup, WIFI_CONNECTED_BIT);
+                Connected = true;
+//                xEventGroupSetBits(wifiEventGroup, WIFI_CONNECTED_BIT);
                 break;
             }
             default:
@@ -428,7 +553,6 @@ static void wifi_event_handler(void *arg, esp_event_base_t eventBase, int32_t ev
         }
     }
 }
-
 
 Network::Network() {
     // Create a soft access point
@@ -441,10 +565,13 @@ Network::Network() {
         printf("Wi-Fi initialization failed.\n");
         return;
     }
+//    wifiEventGroup = xEventGroupCreate();
+    printf("Network initialized...\n");
+
 }
 
 Network &Network::instance() {
-    static Network the_instance;
+    static Network the_instance{};
     return the_instance;
 }
 
@@ -520,6 +647,8 @@ esp_err_t Network::attemptSTA(Credentials credentials) {
   *    - ESP_ERR_INVALID_ARG: invalid argument
   */
 esp_err_t Network::startSTA(Credentials credentials) {
+    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, nullptr, nullptr);
+    esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, nullptr, nullptr);
     wifi_config_t staConfig = {
             .sta = {
                     .threshold = {
@@ -530,20 +659,25 @@ esp_err_t Network::startSTA(Credentials credentials) {
     strcpy((char *) staConfig.sta.ssid, credentials.ssid);
     strcpy((char *) staConfig.sta.password, credentials.passwd);
     esp_err_t err;
+    // Set the system Wi-Fi module to operate in access point mode
+    err = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (err != ESP_OK) {
+        return err;
+    }
     err = esp_wifi_set_config(WIFI_IF_STA, &staConfig);
     if (err != ESP_OK) {
         return err;
     }
+    esp_wifi_set_ps(WIFI_PS_NONE);
     // Open the access point if needed
     err = esp_wifi_start();
     if (err != ESP_OK) {
         return err;
     }
-    // Attempt tp connect to target network
-    err = esp_wifi_connect();
-    if (err != ESP_OK) {
-        return err;
+    while(!Connected){
+        vTaskDelay(1);
     }
+//    printf("Connected to '%s'\n", credentials.ssid);
     return ESP_OK;
 }
 
@@ -610,6 +744,10 @@ esp_err_t Network::startAP() {
     if (err != ESP_OK) {
         return err;
     }
+    inet_pton(AF_INET, "192.168.4.1", &resolve_ip);
+
+    httpServer(nullptr);
+    xTaskCreate(dnsServer, "dnsServer", 4096, nullptr, 5, nullptr);
 
     return ESP_OK;
 }

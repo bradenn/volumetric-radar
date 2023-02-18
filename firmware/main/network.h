@@ -25,6 +25,33 @@
 
 static wifi_ap_record_t wifi_records[AP_SCAN_MAX_AP];
 
+// Inspired by https://github.com/abobija/esp-dns-hijack-srv/blob/master/dns_hijack_srv.h
+
+typedef struct __attribute__((packed)) DnsHeader {
+    uint16_t ID;
+    uint8_t RD: 1;
+    uint8_t TC: 1;
+    uint8_t AA: 1;
+    uint8_t OPCODE: 4;
+    uint8_t QR: 1;
+    uint8_t RCODE: 4;
+    uint8_t Z: 3;
+    uint8_t RA: 1;
+    uint16_t QDCOUNT;
+    uint16_t ANCOUNT;
+    uint16_t NSCOUNT;
+    uint16_t ARCOUNT;
+} DnsHeader;
+
+typedef struct __attribute__((packed)) DnsResponse {
+    uint16_t NAME;
+    uint16_t TYPE;
+    uint16_t CLASS;
+    uint32_t TTL;
+    uint16_t RDLENGTH;
+    uint32_t RDATA;
+} DnsResponse;
+
 struct Credentials {
     char *ssid;
     char *passwd;
@@ -38,8 +65,6 @@ public:
 
     Network(const Network &) = default;
 
-    Network();
-
     Network &operator=(const Network &) = delete;
 
     esp_err_t startAP();
@@ -50,12 +75,14 @@ public:
 
     wifi_ap_record_t scannedNetworks[AP_SCAN_MAX_AP]{};
 
-    esp_err_t scan();
+    static esp_err_t scan();
 
 private:
 
     int attemptNum = 0;
 
+
+    Network();
 
     TaskHandle_t dnsTask{};
 
