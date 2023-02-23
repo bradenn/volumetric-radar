@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bridge/internal/pkg"
+	"bridge/internal/core"
 )
 
 func main() {
@@ -10,5 +10,6 @@ func main() {
 	//	log.Log("It seems to be not working: %s", err)
 	//	return
 	//}
-	_ = pkg.NewServer("ws://10.0.1.85/ws")
+	core.NewController()
+	//_ = pkg.NewServer("ws://10.0.1.85/ws")
 }
