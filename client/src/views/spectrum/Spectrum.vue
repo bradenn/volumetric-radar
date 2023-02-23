@@ -5,6 +5,7 @@ import {onMounted, onUnmounted, reactive} from "vue";
 import Wave from "@/views/spectrum/Wave.vue";
 import Polar from "@/components/Polar.vue";
 import FFT from "@/views/spectrum/FFT.vue";
+import Beam from "@/components/Beam.vue";
 
 
 interface Datatype {
@@ -125,9 +126,14 @@ function wsClose(e: Event) {
 <template>
   {{ state.last }} - {{ state.waiting }} {{ state.connected }}
   <h2>Channel 0</h2>
-  <div class="tool-grid">
-    <Polar delta="80" name="Horizontal"></Polar>
-    <Polar :landscape="true" delta="34" name="Vertical"></Polar>
+  <div class="d-flex flex-column gap-2">
+    <div class="demo-grid">
+      <Beam></Beam>
+    </div>
+    <div class="tool-grid">
+      <Polar delta="80" name="Horizontal"></Polar>
+      <Polar :landscape="true" delta="34" name="Vertical"></Polar>
+    </div>
   </div>
   <FFT :frequencies="state.frequencies" :lut="state.ch1" :spectrum="state.ch0" name="FFT"></FFT>
   <Wave :fft="false" :values="state.ch2" name="Signal"></Wave>
@@ -135,6 +141,12 @@ function wsClose(e: Event) {
 </template>
 
 <style scoped>
+.demo-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(20rem, 1fr));
+  gap: 0.5rem;
+}
+
 .tool-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(20rem, 1fr));
