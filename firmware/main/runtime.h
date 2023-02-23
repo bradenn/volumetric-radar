@@ -11,6 +11,7 @@
 #include "adc.h"
 #include "network.h"
 #include "persistent.h"
+#include "indicator.h"
 
 
 enum RuntimeState {
@@ -31,6 +32,8 @@ public:
 private:
 
     RuntimeState state{};
+
+    Indicator *indicator;
 
 
 };

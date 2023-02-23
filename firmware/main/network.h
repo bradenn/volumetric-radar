@@ -82,6 +82,8 @@ private:
     int attemptNum = 0;
 
 
+
+
     Network();
 
     TaskHandle_t dnsTask{};

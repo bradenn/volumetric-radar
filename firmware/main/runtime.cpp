@@ -13,6 +13,7 @@
 Runtime::Runtime() {
     // Set the runtime state to initializing
     state = INITIALIZE;
+    Indicator::instance().setIndicator(POWER, true);
     // Initialize the network interface
     ESP_ERROR_CHECK(esp_netif_init());
     // Initialize the event loop
@@ -26,11 +27,13 @@ Runtime::Runtime() {
     p.readString(NVS_KEY_PASSWD, passwd);
     auto net = Network::instance();
     esp_err_t err;
+    Indicator::instance().setPulsing(LINK, true);
     if (strcmp("unset", ssid) == 0) {
         state = SETUP;
         err = net.startAP();
         if (err != ESP_OK) {
             printf("Network::AP initialization failed. (%s)\n", esp_err_to_name(err));
+            Indicator::instance().setIndicator(FAULT, true);
             return;
         }
     } else {
@@ -38,10 +41,11 @@ Runtime::Runtime() {
         err = net.startSTA({.ssid = ssid, .passwd = passwd});
         if (err != ESP_OK) {
             printf("Network::STA initialization failed. (%s)\n", esp_err_to_name(err));
+            Indicator::instance().setIndicator(FAULT, true);
             return;
         }
         printf("Connected\n");
-
+        Indicator::instance().setIndicator(LINK, true);
         Server();
     }
 
