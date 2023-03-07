@@ -2,26 +2,26 @@ menu "vRadar Rev2"
 
     config vRADAR_INDICATOR_S1
         int "The S1 indicator GPIO port."
-        default 11
+        default 13
     config vRADAR_INDICATOR_S2
         int "The S2 indicator GPIO port."
         default 12
     config vRADAR_INDICATOR_S3
         int "The S3 indicator GPIO port."
-        default 13
+        default 11
 
     config vRADAR_I1
         int "The in-phase (I) IF signal GPIO port for the channel 1 receiver."
-        default 4
+        default 3
     config vRADAR_Q1
         int "The quadrature (Q) IF signal GPIO port for the channel 1 receiver."
-        default 5
+        default 4
     config vRADAR_Q2
         int "The quadrature (Q) IF signal GPIO port for the channel 2 receiver."
-        default 6
+        default 5
     config vRADAR_I2
         int "The in-phase (I) IF signal GPIO port for the channel 2 receiver."
-        default 7
+        default 6
 
     config vRADAR_FOV_X
         int "The horizontal field of view of the radar module."

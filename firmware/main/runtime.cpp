@@ -28,6 +28,7 @@ Runtime::Runtime() {
     auto net = Network::instance();
     esp_err_t err;
     Indicator::instance().setPulsing(LINK, true);
+    printf("Connecting: SSID: %s PASS: %s\n", ssid, passwd);
     if (strcmp("unset", ssid) == 0) {
         state = SETUP;
         err = net.startAP();

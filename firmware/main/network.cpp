@@ -207,13 +207,12 @@ static esp_err_t connectIndex(httpd_req_t *req) {
         oss << "</form>";
     } else {
         Network *n = &Network::instance();
-        esp_err_t e = n->startSTA({.ssid = out, .passwd = pass});
+        esp_err_t e = n->attemptSTA({.ssid = out, .passwd = pass});
         if (e != ESP_OK) {
             oss << "<div class='title'>WRONG PASSWORD for '" << out << "'</div>";
 
         } else {
-            Persistent::instance().writeString("ssid", out);
-            Persistent::instance().writeString("passwd", pass);
+
             reboot = true;
             oss << "<div class='title'>Connected to '" << out << "'</div>";
             oss << "<div>This network will now be disabled. Please continue from your selected network.</div>";
@@ -236,9 +235,9 @@ static esp_err_t connectIndex(httpd_req_t *req) {
     // Send the status OK code
     httpd_resp_set_status(req, HTTPD_200);
     free(query);
-    if(reboot) {
-        esp_restart();
-    }
+//    if(reboot) {
+//        esp_restart();
+//    }
     return ESP_OK;
 }
 
@@ -629,11 +628,20 @@ esp_err_t Network::attemptSTA(Credentials credentials) {
     strcpy((char *) staConfig.sta.ssid, credentials.ssid);
     strcpy((char *) staConfig.sta.password, credentials.passwd);
     esp_err_t err;
+    err = esp_wifi_set_config(WIFI_IF_STA, &staConfig);
+    if (err != ESP_OK) {
+        return err;
+    }
     // Attempt tp connect to target network
     err = esp_wifi_connect();
     if (err != ESP_OK) {
         return err;
     }
+    printf("Connected to '%s'\n", credentials.ssid);
+    auto p = &Persistent::instance();
+    p->writeString("ssid", credentials.ssid);
+    p->writeString("passwd", credentials.passwd);
+
     return ESP_OK;
 }
 
@@ -668,7 +676,7 @@ esp_err_t Network::startSTA(Credentials credentials) {
     if (err != ESP_OK) {
         return err;
     }
-    esp_wifi_set_ps(WIFI_PS_NONE);
+//    esp_wifi_set_ps(WIFI_PS_NONE);
     // Open the access point if needed
     err = esp_wifi_start();
     if (err != ESP_OK) {
@@ -677,7 +685,8 @@ esp_err_t Network::startSTA(Credentials credentials) {
     while(!Connected){
         vTaskDelay(1);
     }
-//    printf("Connected to '%s'\n", credentials.ssid);
+
+    printf("Connected to '%s'\n", credentials.ssid);
     return ESP_OK;
 }
 
