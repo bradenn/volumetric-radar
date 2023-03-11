@@ -8,8 +8,8 @@
 #include <cstdint>
 #include <deque>
 
-#define BUFFER_SIZE 512
-#define BUFFER_COUNT 16
+#define BUFFER_SIZE 480
+#define BUFFER_COUNT 3
 
 using std::deque;
 
@@ -23,6 +23,8 @@ public:
 
     void popBuffer();
 
+    bool hasNext();
+
     int *frontBuffer();
 
     void push(int value);
@@ -32,18 +34,13 @@ public:
 private:
 
     int index = 0;
-    deque<int *> buffer;
+    deque<int *> buffer{};
     int *current = nullptr;
 
     void initBuffer();
 
 
 };
-
-
-
-
-
 
 
 #endif //RADAR_BUFFER_H

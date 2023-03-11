@@ -5,6 +5,8 @@
 #include <esp_timer.h>
 #include <cstring>
 #include <esp_adc/adc_cali_scheme.h>
+#include <rom/ets_sys.h>
+#include <driver/gpio.h>
 #include "adc.h"
 
 static TaskHandle_t s_task_handle;
@@ -14,47 +16,23 @@ uint64_t micros() {
 }
 
 
-void Adc::restart() {
-    stop();
-    start();
-}
+Adc::Adc(AdcConfig conf) : conf(conf) {
 
+    // Set the sample bytes to the number of samples per measurement * bytes per measurement * number of channels
+    numSamples = conf.sampling.subSamples * SOC_ADC_DIGI_RESULT_BYTES * conf.channels.count;
 
-void Adc::start() {
-    if (this->running || !this->idle) return;
-    this->idle = false;
-    while (!this->running) {
-        vTaskDelay(1);
-    }
-    printf("ADC Startup complete.\n");
-}
+    // Define the buffer size as being large enough to contain a sample set from all channels
+    bufferSize = numSamples;
 
-void Adc::stop() {
-    if (this->idle || !this->running) return;
-    this->running = false;
-    while (!this->idle) {
-        vTaskDelay(1);
-    }
+    buffers[0] = new Buffer();
+    buffers[1] = new Buffer();
+    buffers[2] = new Buffer();
+    buffers[3] = new Buffer();
 
-    printf("ADC Shutdown complete.\n");
+    xTaskCreatePinnedToCore(begin, "adcRunner", BUFFER_SIZE * 4 * BUFFER_COUNT * 5, this, 5, nullptr, 1);
 
 }
 
-Adc::Adc(AdcConfig *conf) {
-
-    this->conf = conf;
-    for (int i = 0; i < this->conf->channels.count+1; ++i) {
-        buffers[i] = new Buffer();
-    }
-
-    xTaskCreate(begin, "adcRunner", 4096 * 2, this, 5, nullptr);
-
-}
-
-
-Adc::Adc() : Adc(new AdcConfig) {
-
-}
 
 /**
   * @brief Configure the analog to digital converter
@@ -67,8 +45,8 @@ void Adc::setup(adc_continuous_handle_t *out_handle) {
     adc_continuous_handle_t localHandle = nullptr;
     // Define configuration for buffer size and samples per frame
     adc_continuous_handle_cfg_t adc_config = {
-            .max_store_buf_size = static_cast<uint32_t>(conf->sampling.bufferSize),
-            .conv_frame_size = static_cast<uint32_t>(conf->sampling.subSamples),
+            .max_store_buf_size = static_cast<uint32_t>(bufferSize),
+            .conv_frame_size = static_cast<uint32_t>(numSamples),
     };
     // Initialize handle
     esp_err_t err;
@@ -79,17 +57,18 @@ void Adc::setup(adc_continuous_handle_t *out_handle) {
     }
     // Define parameters
 
+
     adc_continuous_config_t dig_cfg = {
-            .sample_freq_hz = static_cast<uint32_t>(conf->sampling.rate),
-            .conv_mode = ADC_CONV_MODE,
+            .sample_freq_hz = static_cast<uint32_t>(conf.sampling.rate),
+            .conv_mode = ADC_CONV_SINGLE_UNIT_1,
             .format = ADC_OUTPUT_TYPE,
     };
     // Define pattern
     adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {{0, 0, 0, 0}};
-    dig_cfg.pattern_num = conf->channels.count;
-    for (int i = 0; i < conf->channels.count; i++) {
-        adc_pattern[i].atten = conf->sampling.attenuation;
-        adc_pattern[i].channel = conf->channels.ports[i] & 0x7;
+    dig_cfg.pattern_num = conf.channels.count;
+    for (int i = 0; i < conf.channels.count; i++) {
+        adc_pattern[i].atten = conf.sampling.attenuation;
+        adc_pattern[i].channel = conf.channels.ports[i] & 0x7;
         adc_pattern[i].unit = ADC_UNIT;
         adc_pattern[i].bit_width = ADC_BIT_WIDTH;
     }
@@ -102,6 +81,9 @@ void Adc::setup(adc_continuous_handle_t *out_handle) {
     }
     // Set the local handle to the main filter
     *out_handle = localHandle;
+    int samplesSec = conf.sampling.rate / conf.sampling.subSamples;
+    int channels = conf.channels.count;
+    printf("ADC Configured: %d samples/sec * %d channels (%d B/s)\n", samplesSec, channels, samplesSec * channels * 4);
 }
 
 static bool IRAM_ATTR
@@ -130,12 +112,70 @@ int makeSigned(unsigned x) {
 
 void Adc::begin(void *params) {
     auto adc = (Adc *) params;
+    adc->running = true;
+    adc->idle = false;
+//
+//    gpio_config_t gpioConfig = {
+//            .pin_bit_mask = (1ULL << 4),
+//            .mode = GPIO_MODE_INPUT,
+//            .pull_up_en = GPIO_PULLUP_DISABLE,
+//            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+//            .intr_type = GPIO_INTR_DISABLE
+//    };
+//
+//    gpio_config(&gpioConfig);
+//
+//    gpioConfig = {
+//            .pin_bit_mask = (1ULL << 5),
+//            .mode = GPIO_MODE_INPUT,
+//            .pull_up_en = GPIO_PULLUP_DISABLE,
+//            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+//            .intr_type = GPIO_INTR_DISABLE
+//    };
+//    gpio_config(&gpioConfig);
+//
+//    gpioConfig = {
+//            .pin_bit_mask = (1ULL << 6),
+//            .mode = GPIO_MODE_INPUT,
+//            .pull_up_en = GPIO_PULLUP_DISABLE,
+//            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+//            .intr_type = GPIO_INTR_DISABLE
+//    };
+//    gpio_config(&gpioConfig);
+//
+//    gpioConfig = {
+//            .pin_bit_mask = (1ULL << 7),
+//            .mode = GPIO_MODE_INPUT,
+//            .pull_up_en = GPIO_PULLUP_DISABLE,
+//            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+//            .intr_type = GPIO_INTR_DISABLE
+//    };
+//    gpio_config(&gpioConfig);
+//    int weights[4] = {0,0,0,0};
+//    int index = 0;
+//    int samples = 0;
+//    while (1) {
+//        weights[0] = gpio_get_level(GPIO_NUM_4);
+//        weights[1] = gpio_get_level(GPIO_NUM_4);
+//        weights[2] = gpio_get_level(GPIO_NUM_5);
+//        weights[3] = gpio_get_level(GPIO_NUM_6);
+//        index = (index + i)
+//        if()
+//
+//        adc->buffers[0]->push();
+//        adc->buffers[1]->push(gpio_get_level(GPIO_NUM_5));
+//        adc->buffers[2]->push(gpio_get_level(GPIO_NUM_6));
+//        adc->buffers[3]->push(gpio_get_level(GPIO_NUM_7));
+//
+//        ets_delay_us(12);
+//    }
+
+
     while (1) {
 
-        printf("ADC Startup initializing...\n");
         uint32_t read = 0;
-        uint8_t result[ADC_CONV_FRAME] = {0};
-        memset(result, 0xcc, ADC_CONV_FRAME);
+        uint8_t result[1024] = {0};
+        memset(result, 0xcc, 1024);
 
         s_task_handle = xTaskGetCurrentTaskHandle();
 
@@ -159,12 +199,10 @@ void Adc::begin(void *params) {
             return;
         }
 
-        uint64_t last = micros();
-        uint64_t numCycles = 0;
         adc_cali_handle_t calHandle = 0;
         adc_cali_curve_fitting_config_t cali_config = {
                 .unit_id = ADC_UNIT_1,
-                .atten = adc->conf->sampling.attenuation,
+                .atten = adc->conf.sampling.attenuation,
                 .bitwidth = ADC_BIT_WIDTH,
         };
 
@@ -172,19 +210,18 @@ void Adc::begin(void *params) {
             printf("ADC Calibration failed!\n");
         }
         adc->running = true;
+        int cycles = 0;
         while (1) {
-            if (adc->idle) {
-                vTaskDelay(1);
-                continue;
-            }
+
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
             // For each channel that the ADC is configured to read
+            int section = 0;
             while (adc->running) {
                 int sumBuffer[ADC_MAX_CHANNELS] = {0};
-                int sumSums[ADC_MAX_CHANNELS] = {0};
+                int sumSums[ADC_MAX_CHANNELS] = {0, 0, 0, 0, 0};
 
-                err = adc_continuous_read(adc->handle, result, adc->conf->sampling.subSamples, &read, 0);
+                err = adc_continuous_read(adc->handle, result, adc->numSamples, &read, 0);
 
                 if (err == ESP_ERR_TIMEOUT) {
                     break;
@@ -193,35 +230,35 @@ void Adc::begin(void *params) {
                     continue;
                 }
 
+
                 for (int i = 0; i < read; i += SOC_ADC_DIGI_RESULT_BYTES) {
                     auto *out = (adc_digi_output_data_t *) &result[i];
                     uint32_t channel = out->type2.channel;
                     uint32_t value = out->type2.data;
-                    for (int j = 0; j < adc->conf->channels.count; ++j) {
-                        if (channel == adc->conf->channels.ports[j]) {
-                            sumBuffer[j] += makeSigned(value);
-                            sumSums[j]++;
+                    for (int j = 0; j < adc->conf.channels.count; ++j) {
+                        if (channel == adc->conf.channels.ports[j]) {
+                            int v;
+                            adc_cali_raw_to_voltage(calHandle, makeSigned(value), &v);
+
+                            sumBuffer[j] += v;
+                            sumSums[j] += 1;
+//                            adc->buffers[j]->push();
                         }
                     }
                 }
-//                if(micros() > adc->cap) continue;
-                for (int j = 0; j < adc->conf->channels.count; ++j) {
-                    if (sumSums[j] <= 0) {
-                        continue;
+
+                for (int j = 0; j < adc->conf.channels.count; ++j) {
+                    int v = 0;
+                    if (sumSums[j] > 0) {
+                        v = sumBuffer[j] / sumSums[j];
+                        adc->buffers[j]->push(v);
+                        adc->cycles++;
+//                        printf("%d samples on channel %d\n", sumSums[j], j);
                     }
-                    int v = sumBuffer[j] / sumSums[j];
-                    int out = 0;
-                    adc->buffers[j]->push(v);
-                    adc->cycles++;
-                    if (micros() - adc->duration >= 1000 * 1000) {
-                        adc->cycles = 0;
-                        adc->duration = micros();
-                    }
-                    adc->capPerSec = (double) ((double) adc->cycles /
-                                               ((double) (micros() - adc->duration) / 1000.0 / 1000.0)) /
-                                     adc->conf->channels.count;
                 }
+
             }
+
         }
         printf("ADC Shutting down components...\n");
         err = adc_cali_delete_scheme_curve_fitting(calHandle);

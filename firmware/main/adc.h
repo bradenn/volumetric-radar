@@ -11,66 +11,53 @@
 #include "esp_adc/adc_continuous.h"
 #include "buffer.h"
 
-#define ADC_FREQUENCY SOC_ADC_SAMPLE_FREQ_THRES_HIGH
-#define ADC_CONV_MODE ADC_CONV_SINGLE_UNIT_1
 #define ADC_OUTPUT_TYPE ADC_DIGI_OUTPUT_FORMAT_TYPE2
-
-#define ADC_CONV_BUFFER (64*4*8)
-#define ADC_CONV_FRAME (int) (256)
-
-#define ADC_ATTENUATION ADC_ATTEN_DB_2_5
 #define ADC_UNIT ADC_UNIT_1
 #define ADC_BIT_WIDTH ADC_BITWIDTH_12
 
 #define ADC_NUM_CHANNELS 5
 #define ADC_MAX_CHANNELS 5
 
-struct samplingConf {
-    int rate = 80000; // Raw samples per second (including subSamples)
-    int subSamples = 8; // The number of sequential samples for each measurement
-    int bufferSize = (subSamples * 128); // The number of samples to record before overflowing the buffer
-    adc_atten_t attenuation = ADC_ATTEN_DB_0;
-};
-struct channelsConf {
-    int count = 4;
-    int ports[ADC_MAX_CHANNELS] = {3, 4, 6, 5};
-};
+typedef struct samplingConf {
+    int rate; // Raw samples per second
+    int subSamples; // Four Channels * Four bytes // The number of sequential samples for each measurement
+    adc_atten_t attenuation;
+} samplingConf;
 
-struct AdcConfig {
+typedef struct channelsConf {
+    int count;
+    int ports[ADC_MAX_CHANNELS];
+} channelsConf;
+
+typedef struct AdcConfig {
     samplingConf sampling{};
     channelsConf channels{};
-};
+} AdcConfig;
 
 class Adc {
 public:
 
-    Adc();
-
-    Adc(AdcConfig *conf);
+    Adc(AdcConfig conf);
 
     static void begin(void * params);
 
     void capture(int us);
-
-    void restart();
-
-    void start();
-
-    void stop();
+    AdcConfig getConfig() {
+        return conf;
+    };
 
     Buffer *buffers[ADC_NUM_CHANNELS]{};
 
-    double getUpdatesPerSecond() {
-        return capPerSec;
-    }
-
 private:
 
-    AdcConfig *conf = nullptr;
+    AdcConfig conf;
+
+    int numSamples;
+    int bufferSize;
 
     void setup(adc_continuous_handle_t *out_handle);
 
-    adc_continuous_handle_t handle;
+    adc_continuous_handle_t handle{};
 
     uint64_t cap = 0;
 

@@ -11,6 +11,7 @@
 #include "socket.h"
 #include "controller.h"
 
+Server *srv;
 #define VCO_FREQUENCY (1000*2)
 #define VCO_DURATION (1000*2)
 
@@ -29,16 +30,19 @@ static char *generateMetadata() {
     // Add generated variables to the object
     cJSON_AddStringToObject(obj, "name", name);
     cJSON_AddStringToObject(obj, "mac", macAddr);
+    auto conf = srv->adc->getConfig();
     // Add compiled config metadata to the object
-    cJSON_AddNumberToObject(obj, "frequency", CONFIG_vRADAR_BASE_FREQUENCY);
+    const int sampleRate = 80000;
+    cJSON_AddNumberToObject(obj, "base", CONFIG_vRADAR_BASE_FREQUENCY);
     cJSON_AddNumberToObject(obj, "xFov", CONFIG_vRADAR_FOV_X);
     cJSON_AddNumberToObject(obj, "yFov", CONFIG_vRADAR_FOV_Y);
     // Generate the ADC parameters
     auto adc = cJSON_CreateObject();
-    cJSON_AddNumberToObject(adc, "samples", ADC_CONV_FRAME);
+    cJSON_AddNumberToObject(adc, "samples", 2);
+    cJSON_AddNumberToObject(adc, "window", BUFFER_SIZE);
     cJSON_AddNumberToObject(adc, "bits", ADC_BIT_WIDTH);
-    cJSON_AddNumberToObject(adc, "frequency", ADC_FREQUENCY);
-    cJSON_AddNumberToObject(adc, "vcoMs", VCO_FREQUENCY);
+    cJSON_AddNumberToObject(adc, "frequency", 40000);
+    cJSON_AddNumberToObject(adc, "pulse", 1000);
     // Add the adc object to the root objects
     cJSON_AddItemToObject(obj, "adc", adc);
     // Marshal the object to json as a string
@@ -128,66 +132,17 @@ std::string uint32_to_hex_string(uint32_t num) {
     return std::string{hex_string};
 }
 
-static void callback(int *arr, int *arr2, int *arr3, int *arr4, int *arr5, int n, int m) {
+static void callback(int *arr[4], int opt[4], int n, int m) {
     if (fd < 0) return;
     httpd_ws_frame_t out_packer;
     memset(&out_packer, 0, sizeof(httpd_ws_frame_t));
 
-    std::ostringstream oss("");
-    std::ostringstream oss1("");
-    std::ostringstream oss2("");
-    std::ostringstream oss3("");
-    std::ostringstream oss4("");
-    for (int i = 0; i < BUFFER_SIZE; i += 2) {
-        uint16_t v1 = arr[i];
-        uint16_t v2 = arr[i + 1];
-        uint32_t packed_values = ((v1 << 16) | v2);
-        std::string hex_string = uint32_to_hex_string(packed_values);
-        oss << hex_string;
-    }
-
-    for (int i = 0; i < BUFFER_SIZE; i += 2) {
-        uint16_t v1 = arr2[i];
-        uint16_t v2 = arr2[i + 1];
-        uint32_t packed_values = ((v1 << 16) | v2);
-        std::string hex_string = uint32_to_hex_string(packed_values);
-        oss1 << hex_string;
-    }
-
-    for (int i = 0; i < BUFFER_SIZE; i += 2) {
-        uint16_t v1 = arr3[i];
-        uint16_t v2 = arr3[i + 1];
-        uint32_t packed_values = ((v1 << 16) | v2);
-        std::string hex_string = uint32_to_hex_string(packed_values);
-        oss2 << hex_string;
-    }
-
-
-    for (int i = 0; i < BUFFER_SIZE; i += 2) {
-        uint16_t v1 = arr4[i];
-        uint16_t v2 = arr4[i + 1];
-        uint32_t packed_values = ((v1 << 16) | v2);
-        std::string hex_string = uint32_to_hex_string(packed_values);
-        oss3 << hex_string;
-    }
-
-    for (int i = 0; i < BUFFER_SIZE; i += 2) {
-        uint16_t v1 = arr5[i];
-        uint16_t v2 = arr5[i + 1];
-        uint32_t packed_values = ((v1 << 16) | v2);
-        std::string hex_string = uint32_to_hex_string(packed_values);
-        oss4 << hex_string;
-    }
-
-
     // Add a status key to the object
     auto lo = cJSON_CreateObject();
+    for (int i = 0; i < 4; i++) {
+        cJSON_AddItemToObject(lo, std::to_string(i).c_str(), cJSON_CreateIntArray(arr[i], BUFFER_SIZE));
+    }
 
-    cJSON_AddItemToObject(lo, "ch0", cJSON_CreateString(oss.str().c_str()));
-    cJSON_AddItemToObject(lo, "ch1", cJSON_CreateString(oss1.str().c_str()));
-    cJSON_AddItemToObject(lo, "ch2", cJSON_CreateString(oss2.str().c_str()));
-    cJSON_AddItemToObject(lo, "ch3", cJSON_CreateString(oss3.str().c_str()));
-    cJSON_AddItemToObject(lo, "ch4", cJSON_CreateString(oss4.str().c_str()));
     cJSON_AddItemToObject(lo, "updates", cJSON_CreateNumber(m));
 
     auto val = cJSON_PrintUnformatted(lo);
@@ -200,7 +155,7 @@ static void callback(int *arr, int *arr2, int *arr3, int *arr4, int *arr5, int n
 
     auto ret = httpd_ws_send_frame_async(hd, fd, &out_packer);
     if (ret != ESP_OK) {
-        printf("Frame send failed... Connection terminated!\n");
+        printf("Send to bridge failed!\n");
         free(val);
         fd = -1;
         return;
@@ -240,33 +195,56 @@ void watcher(void *arg) {
             continue;
         }
 
+
+
+
+
+//        const int numBuffers = 4;
+//        bool ready = true;
+//        int *bufs[numBuffers];
+//        int out[numBuffers];
+//        for (int i = 0; i < numBuffers; ++i) {
+//            Buffer *buf = adc->buffers[i];
+//            if (buf != nullptr) {
+//                bufs[i] = buf->frontBuffer();
+//            } else {
+//                ready = false;
+//                break;
+//            }
+//
+//        }
+//
+//        if (ready) {
+//            callback(bufs, out, 4, 4);
+//            for (int i = 0; i < numBuffers; ++i) {
+//                Buffer *buf = adc->buffers[i];
+//                buf->popBuffer();
+//            }
+//        } else {
+//            vTaskDelay(1);
+//        }
+
+
         int *ch0 = adc->buffers[0]->frontBuffer();
         int *ch1 = adc->buffers[1]->frontBuffer();
         int *ch2 = adc->buffers[2]->frontBuffer();
         int *ch3 = adc->buffers[3]->frontBuffer();
-        int *ch4 = adc->buffers[4]->frontBuffer();
-
         if (ch0 != nullptr && ch1 != nullptr && ch2 != nullptr && ch3 != nullptr) {
-            if (ch4 != nullptr) {
-                callback(ch0, ch1, ch2, ch3, ch4, BUFFER_SIZE, (int) adc->getUpdatesPerSecond());
-            } else {
-                int dummy[10] = {};
-                callback(ch0, ch1, ch2, ch3, dummy, BUFFER_SIZE, (int) adc->getUpdatesPerSecond());
-            }
+            int *bufs[4] = {ch0, ch1, ch2, ch3};
+            int *opt[4] = {nullptr};
+            callback(bufs, reinterpret_cast<int *>(opt), 4, 4);
             adc->buffers[0]->popBuffer();
             adc->buffers[1]->popBuffer();
             adc->buffers[2]->popBuffer();
             adc->buffers[3]->popBuffer();
-            if (ch4 != nullptr) {
-                adc->buffers[4]->popBuffer();
-            }
+
+
         } else {
             vTaskDelay(1);
-
         }
-
     }
 }
+
 
 Server::Server() {
 
@@ -285,10 +263,22 @@ Server::Server() {
     httpd_register_uri_handler(server, &options);
     httpd_register_uri_handler(server, &socket_get);
 
-//    adc = new Adc();
-    Controller cont = Controller();
-    adc = cont.adc;
+    AdcConfig conf = {
+            .sampling{
+                    .rate = 80000,
+                    .subSamples = 4,
+                    .attenuation = ADC_ATTEN_DB_0
+            },
+            .channels {
+                    .count = 4,
+                    .ports = {3, 4, 6, 5}
+            }
+    };
+    adc = new Adc(conf);
+    srv = this;
+    new Controller(adc);
+
 //    xTaskCreatePinnedToCore(fco, "fco", 4096 * 2, adc, 7, nullptr, 1);
 //    xTaskCreatePinnedToCore(adcThread, "adc", 4096 * 2, adc, 5, nullptr, 1);
-    xTaskCreate(watcher, "adcWatch", 4096 * 4, adc, 4, nullptr);
+    xTaskCreatePinnedToCore(watcher, "adcWatch", 4096 * 4, adc, 4, nullptr, 1);
 }

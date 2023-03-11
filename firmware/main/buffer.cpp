@@ -1,4 +1,6 @@
 #include <cstdio>
+#include <esp_system.h>
+#include <esp_heap_caps.h>
 #include "buffer.h"
 
 //
@@ -20,6 +22,7 @@ int Buffer::numBuffers() {
 }
 
 int *Buffer::frontBuffer() {
+
     if (buffer.empty()) {
         return nullptr;
     } else {
@@ -28,7 +31,8 @@ int *Buffer::frontBuffer() {
 }
 
 void Buffer::initBuffer() {
-    current = (int *) malloc(BUFFER_SIZE * sizeof(int));
+
+    current = (int *) heap_caps_malloc(BUFFER_SIZE * sizeof(int), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     index = 0;
 }
 
@@ -38,9 +42,13 @@ Buffer::Buffer() {
 }
 
 void Buffer::nextBuffer() {
+
     if (buffer.size() < BUFFER_COUNT) {
         buffer.push_back(current);
         initBuffer();
+    } else {
+        printf("buffer overflow %lu\n", esp_get_free_heap_size());
+
     }
     index = 0;
 }
@@ -52,4 +60,8 @@ void Buffer::push(int value) {
     if (index == 0) {
         nextBuffer();
     }
+}
+
+bool Buffer::hasNext() {
+    return !buffer.empty();
 }

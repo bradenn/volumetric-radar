@@ -26,9 +26,9 @@ class Server{
 public:
 
     Server();
+    Adc *adc;
 
 private:
-    Adc *adc;
 
     httpd_handle_t server{};
     httpd_config_t config{};

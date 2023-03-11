@@ -4,36 +4,28 @@
 
 #include <esp_timer.h>
 #include <driver/gpio.h>
-#include <esp_adc/adc_oneshot.h>
-#include <driver/ledc.h>
 #include <driver/pulse_cnt.h>
+#include <driver/ledc.h>
+#include <rom/ets_sys.h>
 #include "controller.h"
+//#include "analog.h"
 
-adc_oneshot_unit_handle_t adc1_handle;
-pcnt_unit_handle_t unit = nullptr;
 
-void counterTask(void *arg) {
-    auto adc = (Adc *) arg;
-    int pulse_count = 0;
-    int event_count = 0;
-    ESP_ERROR_CHECK(pcnt_unit_get_count(unit, &pulse_count));
-    if (adc->buffers[4] != nullptr) {
-        adc->buffers[4]->push(pulse_count);
-    }
-    pcnt_unit_clear_count(unit);
-}
+//pcnt_unit_handle_t unit = nullptr;
+//
+//void counterTask(void *arg) {
+//    auto adc = (Adc *) arg;
+//    int pulse_count = 0;
+//    ESP_ERROR_CHECK(pcnt_unit_get_count(unit, &pulse_count));
+//    adc->buffers[4]->push(pulse_count);
+//    pcnt_unit_clear_count(unit);
+//}
 
+// Chirp
 void timerTask(void *arg) {
-    auto adc = (Adc *) arg;
-    double steps = 1;
-    adc->start();
-    // Begin Listening
     gpio_set_level(GPIO_NUM_9, 1);
-    usleep(100);
+    usleep(10);
     gpio_set_level(GPIO_NUM_9, 0);
-    usleep(800);
-    // Stop Listening
-    adc->stop();
 }
 
 
@@ -45,9 +37,8 @@ static bool example_pcnt_on_reach(pcnt_unit_handle_t unit, const pcnt_watch_even
     return (high_task_wakeup == pdTRUE);
 }
 
-Controller::Controller() {
-    auto adcConf = new AdcConfig;
-    adc = new Adc(adcConf);
+Controller::Controller(Adc* adc) {
+    esp_err_t err;
     //zero-initialize the config structure.
     gpio_config_t io_conf = {};
     //disable interrupt
@@ -57,20 +48,20 @@ Controller::Controller() {
     //bit mask of the pins that you want to set,e.g.GPIO18/19
     io_conf.pin_bit_mask = 1ULL << GPIO_NUM_9;
     //disable pull-down mode
-    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
     //disable pull-up mode
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
     //configure GPIO with the given settings
     gpio_config(&io_conf);
-
+/*
     pcnt_unit_config_t unit_config = {
-            .low_limit = -750,
-            .high_limit = 750,
+            .low_limit = -1000,
+            .high_limit = 1000,
     };
 
     pcnt_new_unit(&unit_config, &unit);
     pcnt_glitch_filter_config_t filter_config = {
-            .max_glitch_ns = 750,
+            .max_glitch_ns = 1000,
     };
     pcnt_unit_set_glitch_filter(unit, &filter_config);
 
@@ -80,7 +71,9 @@ Controller::Controller() {
     pcnt_channel_handle_t pcnt_chan = NULL;
     pcnt_new_channel(unit, &chan_a_config, &pcnt_chan);
 
-    pcnt_channel_set_edge_action(pcnt_chan, PCNT_CHANNEL_EDGE_ACTION_INCREASE, PCNT_CHANNEL_EDGE_ACTION_DECREASE);
+    ESP_ERROR_CHECK(pcnt_channel_set_edge_action(pcnt_chan, PCNT_CHANNEL_EDGE_ACTION_INCREASE,
+                                                 PCNT_CHANNEL_EDGE_ACTION_DECREASE));
+
     pcnt_event_callbacks_t cbs = {
             .on_reach = example_pcnt_on_reach,
     };
@@ -89,7 +82,7 @@ Controller::Controller() {
 
     ESP_ERROR_CHECK(pcnt_unit_enable(unit));
     ESP_ERROR_CHECK(pcnt_unit_clear_count(unit));
-    ESP_ERROR_CHECK(pcnt_unit_start(unit));
+    ESP_ERROR_CHECK(pcnt_unit_start(unit));*/
 
 
     esp_timer_handle_t chirpTimer;
@@ -99,16 +92,17 @@ Controller::Controller() {
             .name = "chirpTask",
     };
     esp_timer_create(&chirpArgs, &chirpTimer);
-    esp_timer_start_periodic((esp_timer_handle_t) chirpTimer, 1000);
+    esp_timer_start_periodic((esp_timer_handle_t) chirpTimer, 250);
 
-    esp_timer_handle_t counterTimer;
-    esp_timer_create_args_t counterArgs = {
-            .callback = counterTask,
-            .arg = adc,
-            .name = "counterTask",
-    };
-    esp_timer_create(&counterArgs, &counterTimer);
-    esp_timer_start_periodic((esp_timer_handle_t) counterTimer, 500);
+//    esp_timer_handle_t counterTimer;
+//    esp_timer_create_args_t counterArgs = {
+//            .callback = counterTask,
+//            .arg = adc,
+//            .name = "counterTask",
+//    };
+//
+//    esp_timer_create(&counterArgs, &counterTimer);
+//    esp_timer_start_periodic((esp_timer_handle_t) counterTimer, 100);
 
 
 }
