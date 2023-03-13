@@ -1,5 +1,10 @@
-<script setup lang="ts"></script>
+<script setup>
+
+import Spectrum from "@/views/spectrum/Spectrum.vue";
+</script>
 
 <template>
-  <h1>Home</h1>
+  <div>
+  <Spectrum></Spectrum>
+  </div>
 </template>

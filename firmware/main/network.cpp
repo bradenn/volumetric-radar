@@ -18,7 +18,7 @@
 
 #define AP_HTML_SETUP_START "_binary_style_css_start"
 #define AP_HTML_SETUP_END "_binary_style_css_end"
-
+static EventGroupHandle_t s_wifi_event_group;
 #define NETWORK_WIFI_RECONNECTS 5
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
@@ -198,7 +198,6 @@ static esp_err_t connectIndex(httpd_req_t *req) {
                 class="header"><h1>vRadar</h1>)";
     oss << "</div>";
 
-    bool reboot = false;
     if (httpd_query_key_value(query, "passwd", pass, querySize) == ESP_ERR_NOT_FOUND) {
         oss << "<div class='title'>Enter the password for '" << out << "'</div>";
         oss << "<form action='/connect' method='get'> <input type='hidden' id='ssid' name='ssid' "
@@ -210,10 +209,7 @@ static esp_err_t connectIndex(httpd_req_t *req) {
         esp_err_t e = n->attemptSTA({.ssid = out, .passwd = pass});
         if (e != ESP_OK) {
             oss << "<div class='title'>WRONG PASSWORD for '" << out << "'</div>";
-
         } else {
-
-            reboot = true;
             oss << "<div class='title'>Connected to '" << out << "'</div>";
             oss << "<div>This network will now be disabled. Please continue from your selected network.</div>";
         }
@@ -372,14 +368,16 @@ void httpServer(void *params) {
 ip4_addr_t resolve_ip;
 
 void dnsCleanup(int socket) {
-    if(socket != -1) {
+    if (socket != -1) {
         shutdown(socket, 0);
         close(socket);
         socket = -1;
     }
 }
+
 #define SRV_HEADER_SIZE           12
 #define SRV_QUESTION_MAX_LENGTH   50
+
 void dnsServer(void *params) {
 
     uint8_t rx[128];
@@ -470,31 +468,8 @@ void dnsServer(void *params) {
 
     }
 
-
-//    esp_ip4_addr_t apIp;
-//    inet_pton(AF_INET, AP_IP, &apIp);
-//
-//    // Open UDP socket to communicate with devices
-//    int sFd = socket(AF_INET, SOCK_DGRAM, 0);
-//    if (sFd < 0) {
-//        printf("Failed to open socket\n");
-//        exit(0);
-//    }
-//
-//    struct sockaddr_in listen{};
-//    listen.sin_family = AF_INET;
-//    listen.sin_addr.s_addr = (in_addr_t) AP_IP;
-//    if (bind(sFd, (struct sockaddr *) &listen, sizeof(struct sockaddr_in)) < 0) {
-//        printf("Failed to bind to port 53\n");
-//        close(sFd);
-//        exit(1);
-//    }
-
-
 }
 
-
-//static EventGroupHandle_t wifiEventGroup;
 static int reconnectAttempts = 0;
 
 #define MAC_STR_FMT "%02x:%02x:%02x:%02x:%02x:%02x"
@@ -504,20 +479,19 @@ static void wifi_event_handler(void *arg, esp_event_base_t eventBase, int32_t ev
     if (eventBase == WIFI_EVENT) {
         switch (eventId) {
             case WIFI_EVENT_STA_START:
-                ESP_ERROR_CHECK(esp_wifi_connect());
+                esp_wifi_connect();
                 printf("Wi-Fi Station mode activated...\n");
                 break;
             case WIFI_EVENT_STA_CONNECTED:
                 printf("Connected to network!\n");
             case WIFI_EVENT_STA_DISCONNECTED:
                 printf("Disconnected!\n");
-                Connected = false;
                 if (reconnectAttempts < NETWORK_WIFI_RECONNECTS) {
                     esp_wifi_connect();
                     reconnectAttempts++;
                     printf("Attempting to reconnect... (%d/%d)\n", reconnectAttempts, NETWORK_WIFI_RECONNECTS);
                 } else {
-//                    xEventGroupSetBits(wifiEventGroup, WIFI_FAIL_BIT);
+                    xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
                 }
                 break;
             case WIFI_EVENT_AP_STACONNECTED: {
@@ -543,8 +517,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t eventBase, int32_t ev
                 auto *ipEvent = (ip_event_got_ip_t *) event_data;
                 printf("Assigned DHCP IP: (" IP_STR_FMT ") \n", IP2STR(&ipEvent->ip_info.ip));
                 reconnectAttempts = 0;
-                Connected = true;
-//                xEventGroupSetBits(wifiEventGroup, WIFI_CONNECTED_BIT);
+                xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
                 break;
             }
             default:
@@ -655,8 +628,11 @@ esp_err_t Network::attemptSTA(Credentials credentials) {
   *    - ESP_ERR_INVALID_ARG: invalid argument
   */
 esp_err_t Network::startSTA(Credentials credentials) {
+    s_wifi_event_group = xEventGroupCreate();
+    // Configure the wifi_event_handler function to handle WI-FI and IP events
     esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, nullptr, nullptr);
     esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, nullptr, nullptr);
+
     wifi_config_t staConfig = {
             .sta = {
                     .threshold = {
@@ -664,8 +640,11 @@ esp_err_t Network::startSTA(Credentials credentials) {
                     },
             },
     };
+
+    // Copy the password from the credential struct to the station mode config
     strcpy((char *) staConfig.sta.ssid, credentials.ssid);
     strcpy((char *) staConfig.sta.password, credentials.passwd);
+
     esp_err_t err;
     // Set the system Wi-Fi module to operate in access point mode
     err = esp_wifi_set_mode(WIFI_MODE_STA);
@@ -676,17 +655,28 @@ esp_err_t Network::startSTA(Credentials credentials) {
     if (err != ESP_OK) {
         return err;
     }
-//    esp_wifi_set_ps(WIFI_PS_NONE);
+    esp_wifi_set_ps(WIFI_PS_NONE);
     // Open the access point if needed
     err = esp_wifi_start();
     if (err != ESP_OK) {
         return err;
     }
-    while(!Connected){
-        vTaskDelay(1);
+    // Wait for the
+    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
+                                           WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                                           pdFALSE,
+                                           pdFALSE,
+                                           portMAX_DELAY);
+
+    if (bits & WIFI_CONNECTED_BIT) {
+        printf("Connected to '%s'\n", credentials.ssid);
+        return ESP_OK;
+    } else if (bits & WIFI_FAIL_BIT) {
+        printf("Connection failed after %d attempts\n", NETWORK_WIFI_RECONNECTS);
+    } else {
+        printf("Unknown WIFI Event\n");
     }
 
-    printf("Connected to '%s'\n", credentials.ssid);
     return ESP_OK;
 }
 

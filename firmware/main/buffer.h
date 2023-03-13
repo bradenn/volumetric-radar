@@ -8,8 +8,8 @@
 #include <cstdint>
 #include <deque>
 
-#define BUFFER_SIZE 480
-#define BUFFER_COUNT 3
+#define BUFFER_SIZE 256
+#define BUFFER_COUNT 24
 
 using std::deque;
 
@@ -25,17 +25,17 @@ public:
 
     bool hasNext();
 
-    int *frontBuffer();
+    uint16_t *frontBuffer();
 
-    void push(int value);
+    void push(uint16_t value);
 
     int numBuffers();
 
 private:
 
     int index = 0;
-    deque<int *> buffer{};
-    int *current = nullptr;
+    deque<uint16_t *> buffer{};
+    uint16_t *current = nullptr;
 
     void initBuffer();
 

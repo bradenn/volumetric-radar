@@ -9,7 +9,6 @@
 #include "iostream"
 #include "string"
 #include "adc.h"
-#include "analog.h"
 
 using std::string;
 

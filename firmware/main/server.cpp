@@ -11,9 +11,10 @@
 #include "socket.h"
 #include "controller.h"
 
-Server *srv;
-#define VCO_FREQUENCY (1000*2)
-#define VCO_DURATION (1000*2)
+#define RADAR_BASE_SAMPLE 83250
+#define RADAR_SAMPLES 3
+#define RADAR_PULSE_DURATION 500 // us
+#define RADAR_PRF 1000
 
 static char *generateMetadata() {
     // Initialize a json object
@@ -29,8 +30,6 @@ static char *generateMetadata() {
     snprintf((char *) macAddr, 18, "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     // Add generated variables to the object
     cJSON_AddStringToObject(obj, "name", name);
-    cJSON_AddStringToObject(obj, "mac", macAddr);
-    auto conf = srv->adc->getConfig();
     // Add compiled config metadata to the object
     const int sampleRate = 80000;
     cJSON_AddNumberToObject(obj, "base", CONFIG_vRADAR_BASE_FREQUENCY);
@@ -38,11 +37,11 @@ static char *generateMetadata() {
     cJSON_AddNumberToObject(obj, "yFov", CONFIG_vRADAR_FOV_Y);
     // Generate the ADC parameters
     auto adc = cJSON_CreateObject();
-    cJSON_AddNumberToObject(adc, "samples", 2);
+    cJSON_AddNumberToObject(adc, "samples", RADAR_SAMPLES);
     cJSON_AddNumberToObject(adc, "window", BUFFER_SIZE);
     cJSON_AddNumberToObject(adc, "bits", ADC_BIT_WIDTH);
-    cJSON_AddNumberToObject(adc, "frequency", 40000);
-    cJSON_AddNumberToObject(adc, "pulse", 1000);
+    cJSON_AddNumberToObject(adc, "frequency", (double) RADAR_BASE_SAMPLE / (double) RADAR_SAMPLES);
+    cJSON_AddNumberToObject(adc, "pulse", RADAR_PULSE_DURATION);
     // Add the adc object to the root objects
     cJSON_AddItemToObject(obj, "adc", adc);
     // Marshal the object to json as a string
@@ -114,7 +113,7 @@ static esp_err_t socket_get_handler(httpd_req_t *req) {
                 printf("Frame send failed!\n");
             }
             // Free the metadata string
-            free(metadata);
+            cJSON_free(metadata);
             // Configure the session
             setSession(req);
             printf("Session started.\n");
@@ -132,36 +131,53 @@ std::string uint32_to_hex_string(uint32_t num) {
     return std::string{hex_string};
 }
 
-static void callback(int *arr[4], int opt[4], int n, int m) {
+static void callback(uint16_t *arr[4], int opt[4], int n, int m) {
     if (fd < 0) return;
     httpd_ws_frame_t out_packer;
     memset(&out_packer, 0, sizeof(httpd_ws_frame_t));
 
     // Add a status key to the object
     auto lo = cJSON_CreateObject();
+    auto st = esp_timer_get_time();
+    int b[BUFFER_SIZE];
     for (int i = 0; i < 4; i++) {
-        cJSON_AddItemToObject(lo, std::to_string(i).c_str(), cJSON_CreateIntArray(arr[i], BUFFER_SIZE));
+        std::ostringstream oss("");
+        for (int j = 0; j < BUFFER_SIZE; j += i) {
+            b[i] = arr[i][j];
+//            uint16_t v1 = ;
+//            uint16_t v2 = arr[i][j + 1];
+//            uint32_t packed_values = ((v1 << 16) | v2);
+//            std::string hex_string = uint32_to_hex_string(packed_values);
+//            oss << hex_string;
+        }
+        cJSON_AddItemToObject(lo, std::to_string(i).c_str(), cJSON_CreateIntArray(b, BUFFER_SIZE));
     }
 
-    cJSON_AddItemToObject(lo, "updates", cJSON_CreateNumber(m));
+    printf("Duration: %lld\n", (esp_timer_get_time() - st));
 
     auto val = cJSON_PrintUnformatted(lo);
-    // Delete the  object
-    cJSON_Delete(lo);
 
     out_packer.payload = (uint8_t *) val;
     out_packer.len = strlen(val);
     out_packer.type = HTTPD_WS_TYPE_TEXT;
 
+    // Delete the  object
+    cJSON_Delete(lo);
+
+    if (val == nullptr) {
+        printf("Packet craft failed!\n");
+        return;
+    }
+
     auto ret = httpd_ws_send_frame_async(hd, fd, &out_packer);
     if (ret != ESP_OK) {
         printf("Send to bridge failed!\n");
-        free(val);
+        cJSON_free(val);
         fd = -1;
         return;
     }
 
-    free(val);
+    cJSON_free(val);
 }
 
 
@@ -195,42 +211,12 @@ void watcher(void *arg) {
             continue;
         }
 
-
-
-
-
-//        const int numBuffers = 4;
-//        bool ready = true;
-//        int *bufs[numBuffers];
-//        int out[numBuffers];
-//        for (int i = 0; i < numBuffers; ++i) {
-//            Buffer *buf = adc->buffers[i];
-//            if (buf != nullptr) {
-//                bufs[i] = buf->frontBuffer();
-//            } else {
-//                ready = false;
-//                break;
-//            }
-//
-//        }
-//
-//        if (ready) {
-//            callback(bufs, out, 4, 4);
-//            for (int i = 0; i < numBuffers; ++i) {
-//                Buffer *buf = adc->buffers[i];
-//                buf->popBuffer();
-//            }
-//        } else {
-//            vTaskDelay(1);
-//        }
-
-
-        int *ch0 = adc->buffers[0]->frontBuffer();
-        int *ch1 = adc->buffers[1]->frontBuffer();
-        int *ch2 = adc->buffers[2]->frontBuffer();
-        int *ch3 = adc->buffers[3]->frontBuffer();
+        uint16_t *ch0 = adc->buffers[0]->frontBuffer();
+        uint16_t *ch1 = adc->buffers[1]->frontBuffer();
+        uint16_t *ch2 = adc->buffers[2]->frontBuffer();
+        uint16_t *ch3 = adc->buffers[3]->frontBuffer();
         if (ch0 != nullptr && ch1 != nullptr && ch2 != nullptr && ch3 != nullptr) {
-            int *bufs[4] = {ch0, ch1, ch2, ch3};
+            uint16_t *bufs[4] = {ch0, ch1, ch2, ch3};
             int *opt[4] = {nullptr};
             callback(bufs, reinterpret_cast<int *>(opt), 4, 4);
             adc->buffers[0]->popBuffer();
@@ -260,25 +246,23 @@ Server::Server() {
         return;
     }
 
+
     httpd_register_uri_handler(server, &options);
     httpd_register_uri_handler(server, &socket_get);
-
     AdcConfig conf = {
             .sampling{
-                    .rate = 80000,
-                    .subSamples = 4,
+                    .rate = RADAR_BASE_SAMPLE,
+                    .subSamples = RADAR_SAMPLES,
                     .attenuation = ADC_ATTEN_DB_0
             },
             .channels {
                     .count = 4,
-                    .ports = {3, 4, 6, 5}
+                    .ports = {3, 4, 5, 6}
             }
     };
     adc = new Adc(conf);
-    srv = this;
     new Controller(adc);
 
-//    xTaskCreatePinnedToCore(fco, "fco", 4096 * 2, adc, 7, nullptr, 1);
-//    xTaskCreatePinnedToCore(adcThread, "adc", 4096 * 2, adc, 5, nullptr, 1);
-    xTaskCreatePinnedToCore(watcher, "adcWatch", 4096 * 4, adc, 4, nullptr, 1);
+    xTaskCreate(watcher, "adcWatch", 4096 * 4, adc, 5, nullptr);
+
 }

@@ -5,7 +5,7 @@ import {v4 as uuidv4} from "uuid";
 
 interface Datatype {
   name: string
-  r?: number[]
+  pings?: number[]
   t?: number[]
   delta: number,
   landscape?: boolean
@@ -39,6 +39,8 @@ function animate() {
   draw();
 }
 
+let runningMin: Map<number, number[]> = new Map<number, number[]>()
+let runningMax: Map<number, number[]> = new Map<number, number[]>()
 function drawRad(ctx: CanvasRenderingContext2D, w: number, h: number, r: number, ang: number, rot?: number) {
   ctx.strokeStyle = "rgb(99,99,102)";
   ctx.fillStyle = "rgb(10,132,255,0.8)";
@@ -81,6 +83,51 @@ function drawRad(ctx: CanvasRenderingContext2D, w: number, h: number, r: number,
     ctx.lineTo(offsetX + edgeLeftX, offsetY + edgeLeftY)
     ctx.stroke()
     ctx.closePath()
+  }
+
+  let maxT = -1
+  let minT = 1
+
+  if(props.t) {
+    // let runs = 20
+    maxT = Math.max(...props.t)
+    minT = Math.min(...props.t)
+    // if (!runningMin.get(0)) {
+    //   runningMin.set(0, [])
+    // }
+    //
+    // if (!runningMax.get(0)) {
+    //   runningMax.set(0, [])
+    // }
+    // runningMin.get(0)?.unshift(minT)
+    // runningMax.get(0)?.unshift(maxT)
+    // minT = (runningMin.get(0)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
+    // maxT = (runningMax.get(0)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
+  }
+
+  if (props.pings && props.t) {
+    let avg = 0
+    for (let i = 0; i < props.pings.length; i++) {
+      let deg = props.pings[i] * (180/Math.PI);
+      let dist = Math.max(map_range(props.t[i], minT, maxT, 0, (r - 1) * slice), 0)
+      let angle = deg
+      let labelX = Math.cos(degToRad(angleCenter + angle)) * dist
+      let labelY = Math.sin(degToRad(angleCenter + angle)) * dist
+      avg += props.pings[i]
+      ctx.beginPath()
+      ctx.moveTo(offsetX, offsetY)
+      ctx.lineTo(offsetX + labelX + 5, offsetY +labelY + 5)
+      ctx.stroke();
+      ctx.closePath()
+      // ctx.fillText(dist, offsetX + labelX - me.width / 2, offsetY + labelY);
+      ctx.fillRect(offsetX + labelX, offsetY +labelY, 10, 10)
+    }
+
+    avg/=props.pings.length
+    let labelX = Math.cos(degToRad(angleCenter + avg*(180/Math.PI))) * (r - 4 / 1.5) * slice
+    let labelY = Math.sin(degToRad(angleCenter + avg*(180/Math.PI))) * (r - 4 / 1.5) * slice
+    // ctx.fillText(dist, offsetX + labelX - me.width / 2, offsetY + labelY);
+    ctx.fillRect(offsetX + labelX, offsetY +labelY, 20, 20)
   }
 
 

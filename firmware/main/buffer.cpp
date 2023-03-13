@@ -10,7 +10,7 @@ void Buffer::popBuffer() {
     if (buffer.empty()) {
         return;
     }
-    int *front = buffer.front();
+    uint16_t *front = buffer.front();
     buffer.pop_front();
     if (front != nullptr) {
         free(front);
@@ -21,7 +21,7 @@ int Buffer::numBuffers() {
     return buffer.size();
 }
 
-int *Buffer::frontBuffer() {
+uint16_t *Buffer::frontBuffer() {
 
     if (buffer.empty()) {
         return nullptr;
@@ -32,12 +32,12 @@ int *Buffer::frontBuffer() {
 
 void Buffer::initBuffer() {
 
-    current = (int *) heap_caps_malloc(BUFFER_SIZE * sizeof(int), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    current = (uint16_t *) malloc(BUFFER_SIZE * sizeof(uint16_t));
     index = 0;
 }
 
 Buffer::Buffer() {
-    buffer = deque<int *>();
+    buffer = deque<uint16_t *>();
     initBuffer();
 }
 
@@ -53,7 +53,7 @@ void Buffer::nextBuffer() {
     index = 0;
 }
 
-void Buffer::push(int value) {
+void Buffer::push(uint16_t value) {
     if (current == nullptr) return;
     current[index] = value;
     index = (index + 1) % BUFFER_SIZE;

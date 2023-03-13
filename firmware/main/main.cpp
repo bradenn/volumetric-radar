@@ -12,6 +12,6 @@ extern "C" void app_main()
 //    in.setIndicator(LINK, true);
 
     while(1){
-        vTaskDelay(1);
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }

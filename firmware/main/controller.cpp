@@ -5,10 +5,8 @@
 #include <esp_timer.h>
 #include <driver/gpio.h>
 #include <driver/pulse_cnt.h>
-#include <driver/ledc.h>
 #include <rom/ets_sys.h>
 #include "controller.h"
-//#include "analog.h"
 
 
 //pcnt_unit_handle_t unit = nullptr;
@@ -24,7 +22,7 @@
 // Chirp
 void timerTask(void *arg) {
     gpio_set_level(GPIO_NUM_9, 1);
-    usleep(10);
+    vTaskDelay(pdMS_TO_TICKS(50/1000.0));
     gpio_set_level(GPIO_NUM_9, 0);
 }
 
@@ -37,7 +35,7 @@ static bool example_pcnt_on_reach(pcnt_unit_handle_t unit, const pcnt_watch_even
     return (high_task_wakeup == pdTRUE);
 }
 
-Controller::Controller(Adc* adc) {
+Controller::Controller(Adc *adc) {
     esp_err_t err;
     //zero-initialize the config structure.
     gpio_config_t io_conf = {};
@@ -48,7 +46,7 @@ Controller::Controller(Adc* adc) {
     //bit mask of the pins that you want to set,e.g.GPIO18/19
     io_conf.pin_bit_mask = 1ULL << GPIO_NUM_9;
     //disable pull-down mode
-    io_conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
     //disable pull-up mode
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
     //configure GPIO with the given settings
@@ -92,7 +90,7 @@ Controller::Controller(Adc* adc) {
             .name = "chirpTask",
     };
     esp_timer_create(&chirpArgs, &chirpTimer);
-    esp_timer_start_periodic((esp_timer_handle_t) chirpTimer, 250);
+    esp_timer_start_periodic((esp_timer_handle_t) chirpTimer, 200);
 
 //    esp_timer_handle_t counterTimer;
 //    esp_timer_create_args_t counterArgs = {

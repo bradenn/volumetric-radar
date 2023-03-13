@@ -1,143 +1,198 @@
 <script setup lang="ts">
 
 
-import {onMounted, onUnmounted, reactive} from "vue";
-import Wave from "@/views/spectrum/Wave.vue";
-import Polar from "@/components/Polar.vue";
-import FFT from "@/views/spectrum/FFT.vue";
-import Beam from "@/components/Beam.vue";
+import {onBeforeUnmount, onMounted, reactive} from "vue";
+import UnitDom from "@/views/spectrum/Unit.vue";
+import type {Channel, Unit} from "@/types";
+import {state} from "vue-tsc/out/shared";
 
+// interface Unit {
+//   channel: Channel
+//   metadata: {
+//     base: number // 80000Hz
+//     samples: number   // 8Hz
+//     frequency: number   // 10000Hz
+//     chirp: number // 1000Hz (once per ms)
+//   }
+//   phase: number[]
+// }
+//
+// interface Channel {
+//   signalI: number[]
+//   signalQ: number[],
+//   spectrum: number[],
+//   frequencies: number[],
+//   peaks: number[],
+// }
 
-interface Datatype {
-  ch0?: number[]
-  payload: string
-  waiting?: number
+interface Metadata {
+  frame: number[]
 }
 
 const state = reactive({
   socket: {} as WebSocket,
-  data: {} as Datatype,
+  units: [] as Unit[],
+  reconnect: 0,
+  data: [{
+    signalI: [],
+    signalQ: [],
+    spectrum: [],
+    frequencies: [],
+    peaks: []
+  }, {
+    signalI: [],
+    signalQ: [],
+    spectrum: [],
+    frequencies: [],
+    peaks: []
+  }] as Channel[],
   canvas: {} as HTMLCanvasElement,
-  ch0: [] as number[],
-  ch1: [] as number[],
-  ch2: [] as number[],
-  last: 0,
-  lastUpdate: 0,
-  out: "",
-  waiting: 0,
+  metadata: {
+
+    last: 0,
+    since: 0,
+    count: 0,
+    updates: 0
+  },
+  start: 0,
   ctx: {} as CanvasRenderingContext2D,
   connected: false,
-  frequencies: [] as number[]
 })
 
 onMounted(() => {
   connect()
 })
 
-onUnmounted(() => {
-
+onBeforeUnmount(() => {
+  close()
 })
 
 
 function close() {
-  state.socket.close();
+  state.socket.close(1000, "")
 }
 
 function connect() {
 
-  let ws = new WebSocket("ws://10.0.1.11:5500/")
+  let ws = new WebSocket("ws://localhost:5500/")
 
   ws.onopen = wsConnect;
   ws.onmessage = wsMessage;
   ws.onclose = wsClose;
-
+  state.metadata.last = Date.now()
   state.socket = ws
 
 }
 
-function map_range(value: number, low1: number, high1: number, low2: number, high2: number) {
-  return low2 + (high2 - low2) * (value - low1) / (high1 - low1);
-}
-
-interface POS {
-  x: number
-  y: number
-}
-
-
 function wsConnect(e: Event) {
-  // state.socket.send("Ping!")
+  state.socket.send("Ping!")
+  state.start = new Date().valueOf()
+  state.reconnect = 0
   state.connected = true
 }
 
-function hexStringToUint32(hex: string): number {
-  return parseInt(hex, 16);
-}
-
-function unpackArray(hexString: string): number[] {
-  const packedValues: number[] = [];
-  for (let i = 0; i < hexString.length; i += 8) {
-    const packedValue = hexStringToUint32(hexString.substr(i, 8));
-    const value1 = packedValue & 0xffff;
-    const value2 = (packedValue >> 16) & 0xffff;
-    packedValues.push(value2, value1);
-  }
-  return packedValues;
-}
 
 function wsMessage(e: MessageEvent) {
-  state.data = {} as Datatype
-  state.last = Date.now() - state.lastUpdate
-  state.lastUpdate = Date.now()
-  state.data = JSON.parse(e.data) as Datatype
-  state.waiting = 0
-  // console.log(state.data)
 
-  // state.out = state.data.payload.length;
-  // return
-
-  // let out = unpackArray(state.data.payload);
-  let obj = JSON.parse(state.data.payload) as {
-    t?: number[]
-    r?: number[],
-    k?: number[],
-    frequencies?: number[],
+  let b = JSON.parse(e.data) as Unit
+  if (!b) {
+    state.units = [{},{}] as Unit[]
+    return
   }
-  state.ch0 = []
-  state.ch1 = []
-  state.ch2 = []
-  state.frequencies = []
-  state.ch1 = obj.t || []
-  state.ch0 = obj.k || []
-  state.ch2 = obj.r || []
-  state.frequencies = obj.frequencies || []
-  // if (state.data.ch1) {
-  //   state.ch1 = [];
-  //   state.ch1 = state.data.ch1;
-  // }
+  if(state.units.filter(u => u.metadata.mac === b.metadata.mac).length > 0) {
+    state.units = state.units.map(u => ((u.metadata.mac === b.metadata.mac) ? b : u))
+  }else{
+    state.units.push(b)
+  }
+  let now = Date.now()
+  state.metadata.since = now - state.metadata.last
+  state.metadata.count++
+  state.metadata.updates = Math.round(state.metadata.count / (state.metadata.since / 1000) * 100) / 100
+
+  if (state.metadata.since > 1000) {
+    state.metadata.last = now
+    state.metadata.count = 0
+  }
 }
 
 function wsClose(e: Event) {
-
+  state.connected = false
+  state.reconnect = 1000
+  setTimeout(connect, state.reconnect)
 }
 
 </script>
 
 <template>
-  {{ state.last }} - {{ state.waiting }} {{ state.connected }}
-  <h2>Channel 0</h2>
-  <div class="d-flex flex-column gap-2">
-    <div class="demo-grid">
-      <Beam></Beam>
-    </div>
-    <div class="tool-grid">
-      <Polar delta="80" name="Horizontal"></Polar>
-      <Polar :landscape="true" delta="34" name="Vertical"></Polar>
+  <div class="d-flex flex-column gap-2 mt-3">
+    <div class="element p-2">
+      <div class="d-flex gap-1 align-items-center gap-1">
+        <div class="label-w500 labe-c3 lh-1 px-2">Dashboard</div>
+        <div class="px-2"></div>
+        <div class="d-flex gap-2 tag label">
+          <div v-if="state.connected" class="text-success text-center" style="width: 8rem">Connected</div>
+          <div v-else-if="state.reconnect != 0" class="text-warning text-center" style="width: 8rem">Reconnecting...</div>
+          <div v-else class="text-warning text-center" style="width: 8rem">Disconnected</div>
+        </div>
+        <div class="d-flex gap-2 tag label">
+          <div class="text-center" style="width: 6rem">{{ state.metadata.updates.toFixed(2) }} up/s</div>
+        </div>
+        <div class="d-flex gap-2 tag label">
+          <div class="text-center" style="width: 6rem">{{ state.data.length }} units</div>
+        </div>
+      </div>
+
     </div>
   </div>
-  <FFT :frequencies="state.frequencies" :lut="state.ch1" :spectrum="state.ch0" name="FFT"></FFT>
-  <Wave :fft="false" :values="state.ch2" name="Signal"></Wave>
-  <!--  <Polar :r="state.ch0" :t="state.ch1" name="Input" :fft="false"></Polar>-->
+
+  <div class="d-flex flex-column gap-1" v-if="state.connected">
+  <div class="d-flex flex-column gap-1 mt-2" v-if="state.units.length > 0">
+    <UnitDom v-for="unit in state.units"  :key="unit.metadata.mac" name="Module 1" :unit="unit"></UnitDom>
+  </div>
+    <!--    <div v-for="d in state.data" class="">-->
+    <!--      <div class="d-flex flex-column gap-2">-->
+    <!--        <div class=""></div>-->
+
+    <!--        &lt;!&ndash;        &ndash;&gt;-->
+    <!--        &lt;!&ndash;-->
+    <!--        <Scanner v-if="d.signalQ" :name="`RX ${state.data.indexOf(d) }`" :channel="d.signalQ"></Scanner>&ndash;&gt;-->
+    <!--        &lt;!&ndash;       &ndash;&gt;-->
+    <!--        <div class="d-flex gap-2">-->
+    <!--          &lt;!&ndash;          <OverWave :values0="d.signalI" :values1="d.signalQ" :name="`RX ${state.data.indexOf(d) }`"></OverWave>&ndash;&gt;-->
+    <!--          <Doppler v-if="d.signalI" :values0="d.spectrum" :values1="d.signalI" name=""></Doppler>-->
+    <!--          &lt;!&ndash;          <Doppler  v-if="d.spectrum" :values0="d.spectrum" :values1="d.spectrum" name=""></Doppler>&ndash;&gt;-->
+    <!--          &lt;!&ndash;&lt;!&ndash;         <&ndash;&gt;&ndash;&gt;-->
+    <!--          <Polar name="dd" :delta="80" :pings="d.phase" style="width: 100%"></Polar>-->
+    <!--          &lt;!&ndash;          &ndash;&gt;-->
+    <!--        </div>-->
+    <!--        &lt;!&ndash;      <FFT :spectrum="d.spectrum" name="dd" :lut="d.frequencies" :frequencies="d.peaks"></FFT>&ndash;&gt;-->
+    <!--        &lt;!&ndash;        &ndash;&gt;-->
+    <!--        &lt;!&ndash;        &ndash;&gt;-->
+    <!--        &lt;!&ndash;        &ndash;&gt;-->
+    <!--        &lt;!&ndash;        &ndash;&gt;-->
+    <!--        &lt;!&ndash;        &ndash;&gt;-->
+    <!--        &lt;!&ndash;        <Scanner v-if="d.spectrum.length > 0" :name="`RX ${state.data.indexOf(d) }`" :channel="d.spectrum"></Scanner>&ndash;&gt;-->
+    <!--        &lt;!&ndash;        &ndash;&gt;-->
+    <!--        &lt;!&ndash;        &ndash;&gt;-->
+    <!--        &lt;!&ndash;        &ndash;&gt;-->
+    <!--        &lt;!&ndash;        &ndash;&gt;-->
+    <!--        &lt;!&ndash;        &ndash;&gt;-->
+    <!--      </div>-->
+    <!--      <Wave :fft="false" :values="state.data[0].phase" name="Q"></Wave>-->
+    <!--    </div>-->
+  </div>
+
+
+  <!--  <Scanner v-if="state.data[0].frequencies" :name="`RX ${state.data.indexOf(d) }`" :channel="state.data[0].frequencies"></Scanner>-->
+  <div class="pt-2" v-if="true">
+    <!--    -->
+  </div>
+  <!--  <Wave :fft="false" :values="state.ch1" name="Q"></Wave>-->
+  <!--  -->
+
+  <!--  <Wave :fft="false" :values="state.fft0" name="I"></Wave>-->
+  <!--  <Wave :fft="false" :values="state.fft1" name="Q"></Wave>-->
+  <!--  -->
 </template>
 
 <style scoped>

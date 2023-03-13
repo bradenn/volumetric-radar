@@ -41,7 +41,9 @@ function animate() {
 function configureCanvas() {
   const _canvas = document.getElementById(`signal-${state.uuid}`)
   state.canvas = _canvas as HTMLCanvasElement
-  state.ctx = state.canvas.getContext("2d") as CanvasRenderingContext2D
+  state.ctx = state.canvas.getContext("2d", {}) as CanvasRenderingContext2D
+
+  // state.ctx.filter = 'brightness(1000%)';
   let scale = 2
   state.ctx.scale(scale, scale)
 
@@ -81,6 +83,7 @@ function draw() {
   let ctx = state.ctx;
   if (!ctx.canvas) return
   ctx.lineWidth = 2
+
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   // drawLegend()
   let w = ctx.canvas.width;
@@ -103,7 +106,7 @@ function draw() {
   }
 
 
-  drawPattern(ctx, props.values, -1, false)
+  drawPattern(ctx, props.values?props.values:[], -1, false)
   let mapAvg = new Map<number, number>()
   let depth = 0
   // for (const hKey in state.lastFew) {
@@ -162,36 +165,19 @@ function findLocalMaximas(arr: number[], threshold: number): number[] {
 
 function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: number, useRelative: boolean) {
 
-  // values = matchedFilter(values, [0.5,0.75,0.5])
   let minY = 0
-  let maxY = 50
+  let maxY = 4095
+
   minY = Math.min(...values);
   state.min = Math.round(minY * 100) / 100;
   maxY = Math.max(...values);
   state.max = Math.round(maxY * 100) / 100;
+
+  maxY = Math.max(maxY, 1)
+
   let begin = 0
   let slope = 0
   let ls = 0
-
-  //
-  //
-  // values = values.slice(mxs[0])
-  // if (useRelative) {
-  //   minY = 0
-  //   maxY = 10
-  // }
-
-  if (props.fft == true) {
-    state.top = []
-    state.top = findLocalMaximas(values, maxY / 4)
-    let masterPoll = 128000;
-    let subSample = 32;
-    let freq = masterPoll / subSample;
-    let window = 1024;
-    state.top = state.top.map(v => Math.round(((v) * (freq / window)) * 1) / 1).filter(v => v != 0)
-    // state.top = state.top.sort((a, b) => b - a).map(v => values.indexOf(v))
-  }
-
 
   ctx.lineWidth = 1
   ctx.strokeStyle = 'rgba(10, 128, 255, 1)';
@@ -244,13 +230,12 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: num
 </script>
 
 <template>
-  <div>
-    <h1></h1>
+  <div class="w-100">
     <div class="canvas-group element">
 
       <div style="height: 2rem" class="d-flex gap-1 justify-content-between w-100">
         <div class="d-flex gap-2 label d-flex flex-row align-items-center px-2">{{ props.name }} <span
-            class="text-muted">0-{{ props.values.length }}</span></div>
+            class="text-muted">0-{{ props.values?.length }}</span></div>
         <div class="d-flex gap-1 ">
           <div class="d-flex gap-2 tag label">
             <div>􀆇</div>
@@ -261,7 +246,7 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: num
             <div>{{ state.min }}</div>
           </div>
           <div v-if="props.fft"></div>
-          <div v-for="i in state.top.slice(0,5)" v-if="props.fft" class="d-flex gap-2 tag tag label">
+          <div v-for="i in state.top.slice(0,1)" v-if="props.fft" class="d-flex gap-2 tag tag label">
             <div>Freq.</div>
             <div>{{ i }} Hz</div>
           </div>
@@ -304,7 +289,7 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: num
   flex-direction: row;
   justify-content: center;
   width: 100%;
-  height: 20rem;
+  height: 10rem;
   align-items: center;
 
 }

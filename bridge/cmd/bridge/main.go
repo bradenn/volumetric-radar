@@ -1,15 +1,36 @@
 package main
 
 import (
-	"bridge/internal/core"
+	"bridge/internal/infrastructure/log"
+	"bridge/internal/pkg"
 )
 
 func main() {
-	//_, err := socket.NewSocket("10.0.1.85:4567")
-	//if err != nil {
-	//	log.Log("It seems to be not working: %s", err)
-	//	return
-	//}
-	core.NewController()
-	//_ = pkg.NewServer("ws://10.0.1.85/ws")
+	server, err := pkg.NewSocketServer()
+	if err != nil {
+		return
+	}
+
+	go server.Serve()
+
+	out := make(chan []byte)
+	go func() {
+		for bytes := range out {
+			err = server.Broadcast(bytes)
+			if err != nil {
+				log.Err(err)
+				continue
+			}
+		}
+	}()
+
+	us, err := pkg.NewUnitServer(out)
+	if err != nil {
+		return
+	}
+
+	us.AddUnit("ws://10.0.1.133/ws")
+
+	for {
+	}
 }

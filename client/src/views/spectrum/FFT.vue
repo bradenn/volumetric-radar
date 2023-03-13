@@ -92,7 +92,7 @@ function draw() {
   ctx.lineTo(w, h / 1.25)
   ctx.stroke()
   ctx.closePath()
-
+  if(!props.spectrum) return;
   let scale = w / props.spectrum.length;
 
   for (let i = 0; i < props.spectrum.length; i++) {
@@ -105,42 +105,11 @@ function draw() {
 
 
   drawPattern(ctx, props.spectrum, -1, false)
-  let mapAvg = new Map<number, number>()
-  let depth = 0
-  // for (const hKey in state.lastFew) {
-  //   depth++
-  //   // let arr = matchedFilter(state.lastFew[hKey], [0.25, 0.75, 0.25]);
-  //   // drawPattern(ctx, arr, -2, false)
-  //   for (let i = 4; i < arr.length; i++) {
-  //     mapAvg.set(i, arr[i] + (mapAvg.get(i) || 0));
-  //   }
-  // }
 }
 
 
 function map_range(value: number, low1: number, high1: number, low2: number, high2: number) {
   return low2 + (high2 - low2) * (value - low1) / (high1 - low1);
-}
-
-interface POS {
-  x: number
-  y: number
-}
-
-const bottomGap = 48;
-
-function lerp(a: number, b: number, t: number): number {
-  return (1 - t) * a + t * b;
-}
-
-function findLocalMaximas(arr: number[], threshold: number): number[] {
-  const maximas: number[] = [];
-  for (let i = 1; i < arr.length - 1; i++) {
-    if (arr[i] > arr[i - 1] && arr[i] > arr[i + 1] && arr[i] > threshold) {
-      maximas.push(i);
-    }
-  }
-  return maximas;
 }
 
 function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: number, useRelative: boolean) {
@@ -173,43 +142,44 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: num
     lastY = y;
   }
 
-
+  if(props.frequencies && props.lut) {
   state.top = props.frequencies.map(f => props.lut[f])
+  }
 
   ctx.closePath()
   ctx.stroke()
   ctx.fill()
-  ctx.fillStyle = 'rgba(255,255,255, 0.75)';
-  ctx.strokeStyle = 'rgba(255,255,255, 0.25)';
-  ctx.font = "20px JetBrains Mono"
-  for (let i = 0; i < props.frequencies.length; i++) {
-    let ln = `${Math.round(props.lut[props.frequencies[i]] * 10) / 10}Hz`;
-    let mt = ctx.measureText(ln);
-    let x = props.frequencies[i] * mass
-    ctx.beginPath()
-    ctx.moveTo(x, h / 1.25 + 6)
-    ctx.lineTo(x, h / 1.25 + mt.fontBoundingBoxAscent / 2)
-    ctx.stroke()
-    ctx.closePath()
-
-
-    ctx.fillText(ln, x - mt.width / 2, h / 1.25 + mt.fontBoundingBoxAscent * 1.75)
-  }
+  // ctx.fillStyle = 'rgba(255,255,255, 0.75)';
+  // ctx.strokeStyle = 'rgba(255,255,255, 0.25)';
+  // ctx.font = "20px JetBrains Mono"
+  // for (let i = 0; i < props.frequencies.length; i++) {
+  //   let ln = `${Math.round(props.lut[props.frequencies[i]] * 10) / 10}Hz`;
+  //   let mt = ctx.measureText(ln);
+  //   let x = props.frequencies[i] * mass
+  //   ctx.beginPath()
+  //   ctx.moveTo(x, h / 1.25 + 6)
+  //   ctx.lineTo(x, h / 1.25 + mt.fontBoundingBoxAscent / 2)
+  //   ctx.stroke()
+  //   ctx.closePath()
+  //
+  //
+  //   ctx.fillText(ln, x - mt.width / 2, h / 1.25 + mt.fontBoundingBoxAscent * 1.75)
+  // }
 
 }
 
 </script>
 
 <template>
-  <div>
-    <h1></h1>
+  <div class="w-100">
+
     <div class="canvas-group element">
 
       <div class="d-flex gap-1 justify-content-between w-100" style="height: 2rem">
         <div class="d-flex gap-2 label d-flex flex-row align-items-center px-2">{{ props.name }} <span
-            class="text-muted">0-{{ props.spectrum.length }}</span></div>
+            class="text-muted">0-{{ props.spectrum?.length }}</span></div>
         <div class="d-flex gap-1 ">
-          <div v-for="i in state.top.slice(0,5)" class="d-flex gap-2 tag tag label">
+          <div v-for="i in state.top.slice(0,1)" class="d-flex gap-2 tag tag label">
             <div>Freq.</div>
             <div>{{ i }} Hz</div>
           </div>
@@ -252,7 +222,7 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: num
   flex-direction: row;
   justify-content: center;
   width: 100%;
-  height: 20rem;
+  height:10rem;
   align-items: center;
 
 }

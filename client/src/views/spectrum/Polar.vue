@@ -165,10 +165,10 @@ function drawPattern(ctx: CanvasRenderingContext2D, t: number[], r: number[], de
 
   // values = matchedFilter(values, [0.25,0.5,0.75,0.5,0.25])
   let minY = 0
-  let maxY = 50
-  minY = Math.min(...r);
+  let maxY = 2
+  // minY = Math.min(...r);
   state.min = Math.round(minY * 100) / 100;
-  maxY = Math.max(...r);
+  // maxY = Math.max(...r);
   state.max = Math.round(maxY * 100) / 100;
   let begin = 0
   let slope = 0
@@ -184,19 +184,22 @@ function drawPattern(ctx: CanvasRenderingContext2D, t: number[], r: number[], de
 
 
   ctx.lineWidth = 1
-  ctx.strokeStyle = 'rgba(255, 128, 0, 0.5)';
+  ctx.fillStyle = 'rgba(255, 128, 0, 0.5)';
 
   let w = ctx.canvas.width;
   let h = ctx.canvas.height;
 
+
+
   let divisions = 128;
   let slice = (Math.PI * 2) / divisions
+  let avg = 0
   ctx.beginPath()
   for (let i = 0; i < t.length; i++) {
-    let x = Math.cos(t[i] / Math.PI) * map_range(r[i], minY, maxY, 0, w / 8)
-    let y = Math.sin(t[i] / Math.PI) * map_range(r[i], minY, maxY, 0, w / 8)
-    ctx.moveTo(w / 2, h / 2);
-    ctx.lineTo(w / 2 + x, h / 2 + y);
+    let x = Math.cos(t[i]) * map_range(3, minY, maxY, 0, w / 8)
+    let y = Math.sin(t[i]) * map_range(3, minY, maxY, 0, w / 8)
+
+    ctx.fillRect(w / 2 + x, h / 2 + y, 10, 10)
 
   }
   ctx.closePath()
@@ -213,7 +216,7 @@ function drawPattern(ctx: CanvasRenderingContext2D, t: number[], r: number[], de
 </script>
 
 <template>
-  <div>
+  <div class="w-100">
     <h1></h1>
     <div class="canvas-group element">
 

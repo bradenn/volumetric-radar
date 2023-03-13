@@ -13,7 +13,7 @@ func (d *deviceService) Create(name string, address string) (*model.Device, erro
 	err := d.repo.Create(&model.Device{
 		Name:      name,
 		Address:   address,
-		Mac:       nil,
+		Mac:       "",
 		LastSeen:  time.Time{},
 		Connected: false,
 		Frequency: 0,

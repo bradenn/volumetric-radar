@@ -12,7 +12,10 @@
     "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix --ignore-path .gitignore"
   },
   "dependencies": {
+    "moment": "^2.29.4",
+    "sass": "^1.58.3",
     "three": "^0.149.0",
+    "three.meshline": "^1.4.0",
     "uuid": "^9.0.0",
     "vue": "^3.2.45",
     "vue-router": "^4.1.6"

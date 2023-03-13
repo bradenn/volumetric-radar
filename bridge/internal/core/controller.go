@@ -23,4 +23,8 @@ func NewController() {
 		Users:   modules.NewUserModule(database),
 	}
 
+	for {
+
+	}
+
 }

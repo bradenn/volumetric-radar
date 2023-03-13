@@ -24,12 +24,8 @@ Adc::Adc(AdcConfig conf) : conf(conf) {
     // Define the buffer size as being large enough to contain a sample set from all channels
     bufferSize = numSamples;
 
-    buffers[0] = new Buffer();
-    buffers[1] = new Buffer();
-    buffers[2] = new Buffer();
-    buffers[3] = new Buffer();
 
-    xTaskCreatePinnedToCore(begin, "adcRunner", BUFFER_SIZE * 4 * BUFFER_COUNT * 5, this, 5, nullptr, 1);
+    xTaskCreatePinnedToCore(begin, "adcRunner", BUFFER_SIZE * 4 * BUFFER_COUNT, this, 6, nullptr, 1);
 
 }
 
@@ -48,6 +44,7 @@ void Adc::setup(adc_continuous_handle_t *out_handle) {
             .max_store_buf_size = static_cast<uint32_t>(bufferSize),
             .conv_frame_size = static_cast<uint32_t>(numSamples),
     };
+
     // Initialize handle
     esp_err_t err;
     err = adc_continuous_new_handle(&adc_config, &localHandle);
@@ -64,7 +61,7 @@ void Adc::setup(adc_continuous_handle_t *out_handle) {
             .format = ADC_OUTPUT_TYPE,
     };
     // Define pattern
-    adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {{0, 0, 0, 0}};
+    adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {};
     dig_cfg.pattern_num = conf.channels.count;
     for (int i = 0; i < conf.channels.count; i++) {
         adc_pattern[i].atten = conf.sampling.attenuation;
@@ -112,64 +109,12 @@ int makeSigned(unsigned x) {
 
 void Adc::begin(void *params) {
     auto adc = (Adc *) params;
-    adc->running = true;
-    adc->idle = false;
-//
-//    gpio_config_t gpioConfig = {
-//            .pin_bit_mask = (1ULL << 4),
-//            .mode = GPIO_MODE_INPUT,
-//            .pull_up_en = GPIO_PULLUP_DISABLE,
-//            .pull_down_en = GPIO_PULLDOWN_DISABLE,
-//            .intr_type = GPIO_INTR_DISABLE
-//    };
-//
-//    gpio_config(&gpioConfig);
-//
-//    gpioConfig = {
-//            .pin_bit_mask = (1ULL << 5),
-//            .mode = GPIO_MODE_INPUT,
-//            .pull_up_en = GPIO_PULLUP_DISABLE,
-//            .pull_down_en = GPIO_PULLDOWN_DISABLE,
-//            .intr_type = GPIO_INTR_DISABLE
-//    };
-//    gpio_config(&gpioConfig);
-//
-//    gpioConfig = {
-//            .pin_bit_mask = (1ULL << 6),
-//            .mode = GPIO_MODE_INPUT,
-//            .pull_up_en = GPIO_PULLUP_DISABLE,
-//            .pull_down_en = GPIO_PULLDOWN_DISABLE,
-//            .intr_type = GPIO_INTR_DISABLE
-//    };
-//    gpio_config(&gpioConfig);
-//
-//    gpioConfig = {
-//            .pin_bit_mask = (1ULL << 7),
-//            .mode = GPIO_MODE_INPUT,
-//            .pull_up_en = GPIO_PULLUP_DISABLE,
-//            .pull_down_en = GPIO_PULLDOWN_DISABLE,
-//            .intr_type = GPIO_INTR_DISABLE
-//    };
-//    gpio_config(&gpioConfig);
-//    int weights[4] = {0,0,0,0};
-//    int index = 0;
-//    int samples = 0;
-//    while (1) {
-//        weights[0] = gpio_get_level(GPIO_NUM_4);
-//        weights[1] = gpio_get_level(GPIO_NUM_4);
-//        weights[2] = gpio_get_level(GPIO_NUM_5);
-//        weights[3] = gpio_get_level(GPIO_NUM_6);
-//        index = (index + i)
-//        if()
-//
-//        adc->buffers[0]->push();
-//        adc->buffers[1]->push(gpio_get_level(GPIO_NUM_5));
-//        adc->buffers[2]->push(gpio_get_level(GPIO_NUM_6));
-//        adc->buffers[3]->push(gpio_get_level(GPIO_NUM_7));
-//
-//        ets_delay_us(12);
-//    }
 
+    adc->buffers[0] = new Buffer();
+    adc->buffers[1] = new Buffer();
+    adc->buffers[2] = new Buffer();
+    adc->buffers[3] = new Buffer();
+    adc->running = true;
 
     while (1) {
 
@@ -215,11 +160,9 @@ void Adc::begin(void *params) {
 
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-            // For each channel that the ADC is configured to read
-            int section = 0;
             while (adc->running) {
                 int sumBuffer[ADC_MAX_CHANNELS] = {0};
-                int sumSums[ADC_MAX_CHANNELS] = {0, 0, 0, 0, 0};
+                int sumSums[ADC_MAX_CHANNELS] = {0};
 
                 err = adc_continuous_read(adc->handle, result, adc->numSamples, &read, 0);
 
@@ -230,19 +173,21 @@ void Adc::begin(void *params) {
                     continue;
                 }
 
-
                 for (int i = 0; i < read; i += SOC_ADC_DIGI_RESULT_BYTES) {
                     auto *out = (adc_digi_output_data_t *) &result[i];
                     uint32_t channel = out->type2.channel;
                     uint32_t value = out->type2.data;
+                    if (channel > 6) {
+                        printf("Invalid\n");
+                        continue;
+                    }
                     for (int j = 0; j < adc->conf.channels.count; ++j) {
                         if (channel == adc->conf.channels.ports[j]) {
                             int v;
-                            adc_cali_raw_to_voltage(calHandle, makeSigned(value), &v);
+//                            adc_cali_raw_to_voltage(calHandle, makeSigned(), &v);
 
-                            sumBuffer[j] += v;
+                            sumBuffer[j] += makeSigned(value);
                             sumSums[j] += 1;
-//                            adc->buffers[j]->push();
                         }
                     }
                 }
@@ -251,9 +196,10 @@ void Adc::begin(void *params) {
                     int v = 0;
                     if (sumSums[j] > 0) {
                         v = sumBuffer[j] / sumSums[j];
-                        adc->buffers[j]->push(v);
-                        adc->cycles++;
-//                        printf("%d samples on channel %d\n", sumSums[j], j);
+                        if (sumSums[j] > adc->conf.sampling.subSamples) printf("Big one! %d\n", v);
+                        if (adc->buffers[j]->numBuffers() < BUFFER_COUNT - 1) {
+                            adc->buffers[j]->push(v);
+                        }
                     }
                 }
 

@@ -7,7 +7,7 @@ interface Bridge {
 }
 
 function getBridgeHost(): string {
-    return "ws://localhost:4567/ws"
+    return "ws://localhost:5055/ws"
 }
 
 export function useBridge(): Bridge {

@@ -15,8 +15,8 @@
 #define ADC_UNIT ADC_UNIT_1
 #define ADC_BIT_WIDTH ADC_BITWIDTH_12
 
-#define ADC_NUM_CHANNELS 5
-#define ADC_MAX_CHANNELS 5
+#define ADC_NUM_CHANNELS 4
+#define ADC_MAX_CHANNELS 4
 
 typedef struct samplingConf {
     int rate; // Raw samples per second

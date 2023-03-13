@@ -4,12 +4,22 @@ import {onMounted, onUnmounted, reactive} from "vue";
 import * as THREE from "three";
 import {BoxGeometry, Object3D, RawShaderMaterial, Vector2, Vector3} from "three";
 import {OrbitControls} from "three/examples/jsm/controls/OrbitControls";
-import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
+import {UnrealBloomPass} from 'three/examples/jsm/postprocessing/UnrealBloomPass';
 import {RenderPass} from "three/examples/jsm/postprocessing/RenderPass";
 import {EffectComposer} from "three/examples/jsm/postprocessing/EffectComposer";
+import type {Zone} from "@/types";
+import {v4 as uuidv4} from "uuid";
+import {TextGeometry} from "three/examples/jsm/geometries/TextGeometry";
+import {Font, FontLoader} from "three/examples/jsm/loaders/FontLoader";
+interface BeamProps {
+  zone: Zone
+}
+
+const props = defineProps<BeamProps>()
 
 const state = reactive({
-  showFrustum: false
+  showFrustum: false,
+  uuid: uuidv4(),
 })
 
 let renderer = {} as THREE.WebGLRenderer
@@ -20,15 +30,16 @@ let controls = {} as OrbitControls
 let room = {} as THREE.Object3D
 let frustum = {} as THREE.Object3D
 let mesh = {} as THREE.Mesh<BoxGeometry, RawShaderMaterial>
+let textMesh = {} as THREE.Mesh
 let material = {} as THREE.RawShaderMaterial
 let targets = new Map<string, THREE.Object3D>();
 
 
 const params = {
-  exposure: 0.1,
-  bloomStrength: 1.5,
-  bloomThreshold: 0.23,
-  bloomRadius: 0.33
+  exposure: 0.4,
+  bloomStrength: 0.5,
+  bloomThreshold: 0.25,
+  bloomRadius: 0.125
 };
 
 onMounted(() => {
@@ -56,15 +67,6 @@ function goToSide() {
   camera.position.set(0, 5, 8)
   controls.update()
 }
-
-const bedroom: number[][] = [
-  [0.00007071067811865477, 0.00007071067811865474],
-  [2.0364675298172563, -2.036467529817257],
-  [2.0364675298172563, -2.3764444702117493],
-  [3.1364428386310497, -2.3764444702117498],
-  [3.1364428386310506, 1.993616858877351],
-  [0, 2.0199212311374914],
-]
 
 function drawFloorPlan(vertices: Vector2[]): THREE.Object3D {
   let points = vertices.map(v => new Vector3(v.x, v.y, 0));
@@ -107,7 +109,7 @@ function drawWalls(vertices: Vector2[], height: number): THREE.Object3D {
   return obj
 }
 
-function drawFrustum(x, y, z: number, fx, fy: number): THREE.Object3D {
+function drawFrustum(x: number, y: number, z: number, fx: number, fy: number): THREE.Object3D {
   let obj = new THREE.Object3D()
 
   let numPointsAzimuth = 12
@@ -470,13 +472,62 @@ function drawRoom(vertices: Vector2[]): THREE.Object3D {
 
   //
   //
-  let ax = new THREE.AxesHelper();
-  // obj.add(ax)
+
+  let clusterPoints: Vector3[] = []
+
+  for (let i = 0; i < 10; i++) {
+    clusterPoints.push(new Vector3(1-Math.random() * 2,  1-Math.random() * 2, 1-Math.random() * 2))
+  }
+
+  let bxcp = new THREE.Box3()
+  bxcp.setFromPoints(clusterPoints)
+
+
+  let bg = new THREE.BufferGeometry()
+  bg.setFromPoints(clusterPoints)
+
+  let pts = new THREE.Points(bg)
+  obj.add(pts)
+
+  // let font = new Font();
+  const loader = new FontLoader();
+  loader.load( 'https://threejs.org/examples/fonts/helvetiker_regular.typeface.json', function ( font )
+  {
+    let tg = new TextGeometry("Hello", { font: font, size: 0.5, height: 0.12, curveSegments: 12, bevelEnabled: false } );
+    textMesh = new THREE.Mesh(tg, new THREE.MeshPhongMaterial())
+    tg.computeBoundingBox()
+    textMesh.translateX(-(tg.boundingBox?.max.x || 0)/2)
+    obj.add(textMesh)
+  });
+
+
+
+
+  let cyl = new THREE.CapsuleGeometry(0.25, 0.5, 2, 6)
+  let cylMesh = new THREE.LineSegments(new THREE.WireframeGeometry(cyl))
+  cylMesh.rotateX(Math.PI/2)
+  cylMesh.translateY(-1/2)
+  cylMesh.translateX(-xc)
+  cylMesh.translateZ(yc)
+  // obj.add(cylMesh)
+  
 
   obj.rotateX((Math.PI / 180) * 90)
   obj.translateX(xc)
   obj.translateY(yc)
   obj.translateZ(1.6 / 3)
+  let ax = new THREE.AxesHelper();
+  scene.add(ax)
+
+  let bx = new THREE.Box3()
+  bx.setFromPoints(vertices.map(v => new Vector3(xc+v.x, -1.2/2, yc+v.y)))
+  let bx3 = new THREE.Box3Helper(bxcp);
+  obj.add(bx3)
+
+  // let cyl = new THREE.Cylindrical(0.5, 0, 3);
+
+
+
 
 
   return obj
@@ -516,7 +567,7 @@ function init() {
     antialias: true
   });
   renderer.shadowMap.enabled = true;
-  let element = document.getElementById("beam-canvas")
+  let element = document.getElementById(`beam-canvas-${state.uuid}`)
   if (!element) return
 
 
@@ -535,6 +586,7 @@ function init() {
   controls.enableDamping = true
   controls.dampingFactor = 0.1
   camera.setFocalLength(50)
+
   scene.background = new THREE.Color(0x191B1E);
   const renderScene = new RenderPass(scene, camera);
   const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
@@ -552,24 +604,31 @@ function init() {
   // axesHelper.setColors(new THREE.Color(255, 0, 0), new THREE.Color(0, 255, 0), new THREE.Color(0, 0, 255))
   // scene.add(axesHelper);
   controls.update()
-  controls.maxPolarAngle = (Math.PI / 180) * 95
-  controls.minPolarAngle = 0
-  controls.maxAzimuthAngle = (Math.PI / 180) * 90
-  controls.minAzimuthAngle = (Math.PI / 180) * -90
-  controls.enableZoom = false
+  // controls.maxPolarAngle = (Math.PI / 180) * 95
+  // controls.minPolarAngle = 0
+  // controls.maxAzimuthAngle = (Math.PI / 180) * 90
+  // controls.minAzimuthAngle = (Math.PI / 180) * -90
+  // controls.enableZoom = false
   scene.add(new THREE.HemisphereLight(0xffffff, 0x000000, 1))
   const gridHelper = new THREE.GridHelper(10, 2)
   // scene.add(gridHelper)
 
 
   let bf: Vector2[] = []
-  for (let i = 0; i < bedroom.length; i++) {
-    bf.push(new Vector2(bedroom[i][0], bedroom[i][1]))
+  for (let i = 0; i < props.zone.corners.length; i++) {
+    bf.push(new Vector2(props.zone.corners[i][0], props.zone.corners[i][1]))
   }
+  let bfMax = Math.max(...props.zone.corners.map(c => c[0]))
+  let bfMin= Math.min(...props.zone.corners.map(c => c[0]))
   room = drawRoom(bf)
+
   // drawTargets()
   scene.add(room)
+  let scale = 3.5/(bfMax + Math.abs(bfMin))
+  scene.scale.set(scale, scale, scale)
   scene.rotateY((Math.PI / 180) * 90)
+
+
   goToTop();
   toggleFrustum()
   toggleFrustum()
@@ -584,7 +643,9 @@ function setCamera(x: number, y: number, z: number) {
 function render() {
 
   // mesh.material.uniforms.cameraPos.value.copy( camera.position );
-
+  if(textMesh.lookAt) {
+  textMesh.lookAt(camera.position)
+  }
   controls.update()
   // room.
   //
@@ -604,7 +665,7 @@ function animate() {
   <div>
     <div class="canvas-group element">
       <div class="d-flex gap-1 justify-content-between w-100" style="height: 1.6rem">
-        <div class="d-flex gap-2 label d-flex flex-row align-items-center px-2 ">Bedroom</div>
+        <div class="d-flex gap-2 label d-flex flex-row align-items-center px-2 ">{{props.zone.name}}</div>
         <div class="d-flex gap-1 ">
           <div class="d-flex tag label" @click="toggleFrustum">
             <div v-if="!state.showFrustum">Show Frustum</div>
@@ -621,7 +682,7 @@ function animate() {
       </div>
 
       <div class="beam-buffer">
-        <div id="beam-canvas" class="inner-canvas">
+        <div :id="`beam-canvas-${state.uuid}`" class="inner-canvas">
         </div>
       </div>
     </div>
