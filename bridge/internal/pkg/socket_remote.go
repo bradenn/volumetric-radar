@@ -8,8 +8,7 @@ import (
 	"gonum.org/v1/gonum/dsp/fourier"
 	"gonum.org/v1/gonum/dsp/window"
 	"math"
-	"math/cmplx"
-	"strconv"
+	"sync"
 	"time"
 )
 
@@ -40,6 +39,22 @@ type UnitData struct {
 	} `json:"adc"`
 }
 
+const (
+	FrameDigest = 10000
+	FrameRender = 33333
+)
+
+type Diagnostic struct {
+	Size struct {
+		Inbound  int `json:"inbound"`
+		Outbound int `json:"outbound"`
+	} `json:"size"`
+	Temporal struct {
+		Absolute int `json:"inbound"`
+		Slice    int `json:"outbound"`
+	} `json:"temporal"`
+}
+
 type Unit struct {
 	Channels []Channel `json:"channels"`
 	Metadata Metadata  `json:"metadata"`
@@ -47,15 +62,20 @@ type Unit struct {
 	Distance []float64 `json:"distance"`
 }
 
-const BufferSize = 8
-const IncomingSize = 512
+const BufferSize = 4
+const IncomingSize = 128
 
 type RemoteUnit struct {
 	Unit Unit
 
+	mutex sync.RWMutex
+
 	buffer   map[int][]complex128
 	velocity map[int][]float64
-	index    int
+
+	dsp map[int][]float64
+
+	index int
 
 	connection *websocket.Conn
 	outbound   chan []byte
@@ -63,47 +83,138 @@ type RemoteUnit struct {
 
 	total int
 	start time.Time
+	rate  float64
 
 	address string
 }
 
-func CalculateRange(fft0, fft1 []complex128, centerFrequencyHz, chirpDurationSec, chirpBandwidthHz, speedOfLightMps, sweepSlopeHzps float64) float64 {
-	// Find the maximum index of the FFT output
-	maxIdx := 0
-	maxMag := 0.0
-	for i := 0; i < len(fft0); i++ {
-		mag := cmplx.Abs(fft0[i] * fft1[i])
-		if mag > maxMag {
-			maxMag = mag
-			maxIdx = i
-		}
+func (r *RemoteUnit) digest() {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	//r.Unit.Channels[0].SignalI = incoming[0]
+	//r.Unit.Channels[0].SignalQ = incoming[1]
+	//r.Unit.Channels[1].SignalI = incoming[2]
+	//r.Unit.Channels[1].SignalQ = incoming[3]
+
+	r.index = (r.index + 1) % BufferSize
+	if len(r.buffer[0]) < BufferSize*IncomingSize {
+		return
 	}
 
-	// Calculate the range using the maximum index
-	rangeVal := speedOfLightMps * (centerFrequencyHz * chirpDurationSec / (2 * chirpBandwidthHz)) * sweepSlopeHzps * float64(maxIdx)
-	return rangeVal
-}
-func BinToFreq(binIndex, fftSize int, sweepRate, chirpDuration float64) float64 {
-	//c := 3e8 // speed of light in meters per second
-	rampDuration := chirpDuration / 2.0
-	sweepBandwidth := sweepRate * rampDuration
-	freqResolution := sweepBandwidth / float64(fftSize)
-	return float64(binIndex)*freqResolution - sweepBandwidth/2.0
-}
+	cmp1 := r.buffer[0]
+	cmp2 := r.buffer[1]
+	cmp1 = window.HannComplex(cmp1)
+	cmp2 = window.HannComplex(cmp2)
+	fft := fourier.NewCmplxFFT(len(cmp1))
 
-const C = 299792458
-const Fs = 13750.0
+	//cmp1 = fourier.CoefficientsRadix2(cmp1)
+	cmp1 = fft.Coefficients(nil, cmp1)
+	//cmp2 = fourier.CoefficientsRadix2(cmp2)
+	cmp2 = fft.Coefficients(nil, cmp2)
+	r.Unit.Phase = []float64{}
+	r.Unit.Distance = []float64{}
+	//for i, _ := range cmp2 {
+	//	deltaPhi := cmplx.Phase(cmp1[i] - cmp2[i])
+	//	theta := math.Asin(0.2257 * deltaPhi)
+	//	// Calculate the time interval between samples
+	//	//dt := 1.0 / 24.125e9
+	//
+	//	// Use the time interval and the angle estimate to estimate the distance to the object
+	//	//distance := dt * C / (2.0 * math.Sin(theta))
+	//	distance := 1.0
+	//
+	//	// Do something with the distance estimate, such as printing it to the console
+	//	if theta == math.NaN() {
+	//		continue
+	//	}
+	//	r.Unit.Distance = append(r.Unit.Distance, distance)
+	//	r.Unit.Phase = append(r.Unit.Phase, theta)
+	//}
 
-func unpackArray(hexString string) []float64 {
-	packedValues := make([]float64, 0)
-	for i := 0; i < len(hexString); i += 8 {
-		packedValue, _ := strconv.ParseUint(hexString[i:i+8], 16, 32)
-		value1 := float64(packedValue & 0xffff)
-		value2 := float64((packedValue >> 16) & 0xffff)
-		packedValues = append(packedValues, value2, value1)
+	r.Unit.Channels[0].Spectrum = []float64{}
+	for i := range cmp1 {
+		r.Unit.Channels[0].Spectrum = append(r.Unit.Channels[0].Spectrum, math.Sqrt(real(cmp1[i])*real(cmp1[i])+imag(cmp1[i])*imag(cmp1[i])))
 	}
 
-	return packedValues
+	r.Unit.Channels[1].Spectrum = []float64{}
+	for i := range cmp2 {
+		r.Unit.Channels[1].Spectrum = append(r.Unit.Channels[1].Spectrum, math.Sqrt(real(cmp2[i])*real(cmp2[i])+imag(cmp2[i])*imag(cmp2[i])))
+	}
+
+	//mx := -1.0
+	//for _, f := range r.Unit.Channels[0].Spectrum {
+	//	if f > mx {
+	//		mx = f
+	//	}
+	//}
+	//
+	//max := findLocalMaxima(r.Unit.Channels[0].Spectrum, mx/1.25)
+	//var out []float64
+	//for i := range max {
+	//	out = append(out, float64(max[i]))
+	//}
+
+	//var freq []float64
+	//for i, _ := range r.Unit.Channels[0].Spectrum {
+	//	freq = append(freq, (r.Unit.Metadata.Frequency*float64(i))/float64(len(cmp1)))
+	//}
+	//
+	//for _, ou := range out {
+	//	r.Unit.Phase = append(r.Unit.Phase, freq[int(ou)])
+	//}
+
+	//r.Unit.Channels[0].Spectrum = r.velocity[0]
+	r.Unit.Channels[0].Peaks = []float64{}
+	r.Unit.Channels[0].Frequencies = []float64{}
+	//
+	//r.Unit.Channels[1].Spectrum = r.velocity[1]
+	r.Unit.Channels[1].Peaks = []float64{}
+	r.Unit.Channels[1].Frequencies = []float64{}
+
+	//
+	r.Unit.Channels[0].SignalI = []float64{}
+	r.Unit.Channels[0].SignalQ = []float64{}
+	cmp1i := fft.Sequence(nil, cmp1)
+	for i := range cmp1i {
+		r.Unit.Channels[0].SignalI = append(r.Unit.Channels[0].SignalI, real(cmp1i[i]))
+		r.Unit.Channels[0].SignalQ = append(r.Unit.Channels[0].SignalQ, imag(cmp1i[i]))
+	}
+
+	r.Unit.Channels[1].SignalI = []float64{}
+	r.Unit.Channels[1].SignalQ = []float64{}
+	cmp2i := fft.Sequence(nil, cmp2)
+	for i := range cmp2i {
+		r.Unit.Channels[1].SignalI = append(r.Unit.Channels[1].SignalI, real(cmp2i[i]))
+		r.Unit.Channels[1].SignalQ = append(r.Unit.Channels[1].SignalQ, imag(cmp2i[i]))
+	}
+
+	r.Unit.Metadata.Window = len(cmp1i)
+
+	r.buffer[0] = []complex128{}
+	r.buffer[1] = []complex128{}
+
+}
+
+func (r *RemoteUnit) tick() {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	marshal, err := json.Marshal(r.Unit)
+	if err != nil {
+		log.Err(err)
+		return
+	}
+
+	timer := time.NewTimer(time.Microsecond * FrameRender)
+	select {
+	case <-timer.C:
+		log.Err(fmt.Errorf("outbound timeout"))
+		return
+	case r.outbound <- marshal:
+		timer.Stop()
+		return
+	}
 }
 
 func (r *RemoteUnit) process(data []byte) {
@@ -112,207 +223,39 @@ func (r *RemoteUnit) process(data []byte) {
 	err := json.Unmarshal(data, &packet)
 	if err != nil {
 		log.Err(err)
-
 		return
 	}
 
-	r.Unit.Channels[0].SignalI = unpackArray(packet.Ch0)
-	r.Unit.Channels[0].SignalQ = unpackArray(packet.Ch1)
-	r.Unit.Channels[1].SignalI = unpackArray(packet.Ch3)
-	r.Unit.Channels[1].SignalQ = unpackArray(packet.Ch2)
+	var incoming [][]float64
 
-	r.total = r.total + (len(r.Unit.Channels[0].SignalI))
-	fmt.Printf("%f\n", float64(r.total)/time.Since(r.start).Seconds())
-	if time.Since(r.start).Seconds() > 5 {
-		r.total = 0
-		r.start = time.Now()
+	for _, result := range packet.Results {
+		incoming = append(incoming, hexStringToIntArray(result))
 	}
 
-	//if len(packet.Ch0) <= 0 {
-	//	return
-	//}
-	//if len(packet.Ch1) <= 0 {
-	//	return
-	//}
-	//if len(packet.Ch2) <= 0 {
-	//	return
-	//}
-	//if len(packet.Ch3) <= 0 {
-	//	return
-	//}
+	r.total += len(incoming[0])
+	if time.Since(r.start) > time.Second {
+		r.rate = float64(r.total) / time.Since(r.start).Seconds()
+		log.Event("Rate: %.4f", r.rate)
+		r.start = time.Now()
+		r.total = 0
+	}
 
 	var cmp1 []complex128
 	var cmp2 []complex128
-
-	for i := range r.Unit.Channels[0].SignalI {
-		cmp1 = append(cmp1, complex(r.Unit.Channels[0].SignalI[i], r.Unit.Channels[0].SignalQ[i]))
-	}
-	for i := range r.Unit.Channels[1].SignalI {
-		cmp2 = append(cmp2, complex(r.Unit.Channels[1].SignalI[i], r.Unit.Channels[1].SignalQ[i]))
+	for i := range incoming[0] {
+		cmp1 = append(cmp1, complex(incoming[0][i], incoming[1][i]))
+		cmp2 = append(cmp2, complex(incoming[3][i], incoming[2][i]))
 	}
 
-	r.buffer[0] = append(r.buffer[0], cmp1...)
-	r.buffer[1] = append(r.buffer[1], cmp2...)
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
 
-	r.index = (r.index + 1) % BufferSize
-	if len(r.buffer[0]) < BufferSize*IncomingSize {
-		return
-	}
+	r.buffer[0] = append(cmp1, r.buffer[0]...)
+	r.buffer[1] = append(cmp2, r.buffer[1]...)
 
-	cmp1 = r.buffer[0]
-	cmp2 = r.buffer[1]
-
-	r.Unit.Phase = []float64{}
-	r.Unit.Distance = []float64{}
-
-	//// Calculate the complex conjugate of cmp2
-	//conj := make([]complex128, len(cmp2))
-	//for i, val := range cmp2 {
-	//	conj[i] = cmplx.Conj(val)
-	//}
-	//
-	//// Calculate the product of cmp1 and the complex conjugate of cmp2
-	//product := make([]complex128, len(cmp1))
-	//for i, val := range cmp1 {
-	//	product[i] = val * conj[i]
-	//}
-	//
-	//// Take the inverse FFT of the product to get the phase difference
-	//
-	//phaseDiff := fft2.IFFT(product)
-	//
-	//for i, _ := range phaseDiff[0 : len(phaseDiff)/2] {
-	//	deltaPhi := cmplx.Phase(phaseDiff[i])
-	//	theta := math.Asin(0.2257 * deltaPhi)
-	//	// Calculate the time interval between samples
-	//	//dt := 1.0 / Fs
-	//
-	//	// Use the time interval and the angle estimate to estimate the distance to the object
-	//	//distance := dt * C / (2.0 * math.Sin(theta))
-	//
-	//	// Do something with the distance estimate, such as printing it to the console
-	//	r.Unit.Distance = append(r.Unit.Distance, rand.NormFloat64())
-	//	r.Unit.Phase = append(r.Unit.Phase, math.Min(math.Max(theta, -math.MaxFloat64), math.MaxFloat64))
-	//}
-
-	//var ftn [][]complex128
-	//idx := -1
-	//for i := 0; i < len(cmp1); i++ {
-	//	if i%IncomingSize == 0 {
-	//		idx++
-	//		ftn = append(ftn, []complex128{})
-	//	}
-	//	ftn[idx] = append(ftn[idx], cmp1[i])
-	//
-	//}
-	//
-	//iou := fft2.FFT2(ftn)
-
-	fft := fourier.NewCmplxFFT(len(cmp2))
-	cmp1 = window.HammingComplex(cmp1)
-	cmp2 = window.HammingComplex(cmp2)
-	cmp1 = fft.Coefficients(nil, cmp1)
-	cmp2 = fft.Coefficients(nil, cmp2)
-
-	//cmp1 = phaseDiff
-
-	//cmp1 = fourier.CoefficientsRadix4(cmp1)
-	//cmp2 = fourier.CoefficientsRadix4(cmp2)
-
-	//r.Unit.Channels[0].Spectrum = []float64{}
-	//for i := range iou {
-	//	for j := range iou[i] {
-	//		r.Unit.Channels[0].Spectrum = append(r.Unit.Channels[0].Spectrum, math.Max(math.Sqrt(real(iou[i][j])*real(iou[i][j])+imag(iou[i][j])*imag(iou[i][j])), 0))
-	//	}
-	//}
-
-	if len(r.velocity[0]) < len(cmp1)/2 {
-		r.velocity[0] = make([]float64, len(cmp1)/2)
-	}
-
-	if len(r.velocity[1]) < len(cmp2)/2 {
-		r.velocity[1] = make([]float64, len(cmp2)/2)
-	}
-
-	r.Unit.Channels[0].Spectrum = []float64{}
-	for i := range cmp1[0 : len(cmp1)/2] {
-		r.Unit.Channels[0].Spectrum = append(r.Unit.Channels[0].Spectrum, math.Max(math.Sqrt(real(cmp1[i])*real(cmp1[i])+imag(cmp1[i])*imag(cmp1[i])), 0))
-	}
-	for i, f := range r.Unit.Channels[0].Spectrum {
-		r.velocity[0][i] += f
-		r.velocity[0][i] /= 2
-	}
-
-	r.Unit.Channels[1].Spectrum = []float64{}
-	for i := range cmp2[0 : len(cmp2)/2] {
-		r.Unit.Channels[1].Spectrum = append(r.Unit.Channels[1].Spectrum, math.Max(math.Sqrt(real(cmp2[i])*real(cmp2[i])+imag(cmp2[i])*imag(cmp2[i])), 0))
-	}
-
-	for i, f := range r.Unit.Channels[1].Spectrum {
-		r.velocity[1][i] += f
-		r.velocity[1][i] /= 2
-	}
-
-	mx := -1.0
-	for _, f := range r.Unit.Channels[0].Spectrum {
-		if f > mx {
-			mx = f
-		}
-	}
-
-	max := findLocalMaxima(r.Unit.Channels[0].Spectrum, mx/2)
-	var out []float64
-	for i := range max {
-		out = append(out, float64(max[i]))
-	}
-
-	var freq []float64
-	for i, _ := range r.Unit.Channels[0].Spectrum {
-		freq = append(freq, (r.Unit.Metadata.Frequency*float64(i))/float64(len(cmp1)))
-	}
-
-	r.Unit.Channels[0].Spectrum = r.velocity[0]
-	r.Unit.Channels[0].Peaks = out
-	r.Unit.Channels[0].Frequencies = freq
-
-	r.Unit.Channels[1].Spectrum = r.velocity[1]
-	r.Unit.Channels[1].Peaks = []float64{}
-	r.Unit.Channels[1].Frequencies = []float64{}
-
-	r.buffer[0] = r.buffer[0][IncomingSize : IncomingSize*BufferSize]
-	r.buffer[1] = r.buffer[1][IncomingSize : IncomingSize*BufferSize]
-
-	marshal, err := json.Marshal(r.Unit)
-	if err != nil {
-		log.Err(err)
-		return
-	}
-	//
-	//r.Unit.Channels[0].SignalI = []float64{}
-	//r.Unit.Channels[0].SignalQ = []float64{}
-	//cmp1i := fft.Sequence(nil, cmp1)
-	//for i := range cmp1i {
-	//	r.Unit.Channels[0].SignalI = append(r.Unit.Channels[0].SignalI, real(cmp1i[i]))
-	//	r.Unit.Channels[0].SignalQ = append(r.Unit.Channels[0].SignalQ, imag(cmp1i[i]))
-	//}
-	//r.Unit.Channels[1].SignalI = []float64{}
-	//r.Unit.Channels[1].SignalQ = []float64{}
-	//cmp2i := fft.Sequence(nil, cmp2)
-	//for i := range cmp2i {
-	//	r.Unit.Channels[1].SignalI = append(r.Unit.Channels[1].SignalI, real(cmp2i[i]))
-	//	r.Unit.Channels[1].SignalQ = append(r.Unit.Channels[1].SignalQ, imag(cmp2i[i]))
-	//}
-	//
-	//r.Unit.Metadata.Window = len(cmp1i)
-	//fmt.Println(time.Since(st))
-	timer := time.NewTimer(time.Millisecond * 100)
-	select {
-	case <-timer.C:
-		log.Err(fmt.Errorf("outbound timeout"))
-		return
-	case r.outbound <- marshal:
-		timer.Stop()
-		return
+	if len(r.buffer[0]) >= IncomingSize*BufferSize {
+		r.buffer[0] = r.buffer[0][0 : IncomingSize*BufferSize]
+		r.buffer[1] = r.buffer[1][0 : IncomingSize*BufferSize]
 	}
 
 }
@@ -365,6 +308,28 @@ func (r *RemoteUnit) connect() error {
 
 	r.connection = conn
 
+	go func() {
+		ticker := time.NewTicker(FrameRender * time.Microsecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case _ = <-ticker.C:
+				r.tick()
+			}
+		}
+	}()
+
+	go func() {
+		ticker := time.NewTicker(FrameDigest * time.Microsecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case _ = <-ticker.C:
+				r.digest()
+			}
+		}
+	}()
+
 	return nil
 
 }
@@ -402,7 +367,9 @@ func (r *RemoteUnit) reconnect() {
 
 func NewRemoteUnit(addr string, out chan []byte) (*RemoteUnit, error) {
 	r := RemoteUnit{
+		mutex: sync.RWMutex{},
 		Unit: Unit{
+
 			Channels: []Channel{{
 				SignalI:     []float64{},
 				SignalQ:     []float64{},
@@ -436,6 +403,7 @@ func NewRemoteUnit(addr string, out chan []byte) (*RemoteUnit, error) {
 		index:    0,
 		buffer:   map[int][]complex128{},
 		velocity: map[int][]float64{},
+		dsp:      map[int][]float64{},
 		address:  addr,
 	}
 	r.buffer[0] = []complex128{}

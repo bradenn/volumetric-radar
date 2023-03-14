@@ -62,10 +62,10 @@ func NewSocketClient(w http.ResponseWriter, r *http.Request, id string) (*Socket
 	if err != nil {
 		return nil, err
 	}
-	s.conn.SetCloseHandler(func(code int, text string) error {
-		s.done <- true
-		return nil
-	})
+	//s.conn.SetCloseHandler(func(code int, text string) error {
+	//	s.done <- true
+	//	return nil
+	//})
 
 	go s.run()
 

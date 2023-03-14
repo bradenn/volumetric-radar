@@ -13,7 +13,7 @@ func main() {
 
 	go server.Serve()
 
-	out := make(chan []byte)
+	out := make(chan []byte, 66)
 	go func() {
 		for bytes := range out {
 			err = server.Broadcast(bytes)

@@ -30,12 +30,19 @@ func (s *SocketServer) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	client.conn.SetCloseHandler(func(code int, text string) error {
+		delete(s.connections, client.Id)
+		return nil
+	})
+
 	s.connections[id] = client
 }
 
 func (s *SocketServer) Broadcast(data []byte) error {
 	for _, client := range s.connections {
-		client.send(data)
+		if client != nil {
+			client.send(data)
+		}
 	}
 	return nil
 }

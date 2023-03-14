@@ -386,13 +386,13 @@ func (s *Remote) process() {
 		channel0.Phase = append(channel0.Phase, math.Asin(dx*0.2257))
 	}
 	match := []complex128{
-		(1 - 0i), (1 - 0i), (1 - 0i), (1 - 0i), (1 - 0i),
-		(1 - 0i), (1 - 0i), (1 - 0i), (1 - 0i), (1 - 0i),
-		(0 + 0i), (0 + 0i), (0 + 0i), (0 + 0i), (0 + 0i),
-		(0 + 0i), (0 + 0i), (0 + 0i), (0 + 0i), (0 + 0i),
-		(0 + 0i), (0 + 0i), (0 + 0i), (0 + 0i), (0 + 0i),
-		(0 + 0i), (0 + 0i), (0 + 0i), (0 + 0i), (0 + 0i),
-		(0 + 0i), (0 + 0i),
+		1 - 0i, 1 - 0i, 1 - 0i, 1 - 0i, 1 - 0i,
+		1 - 0i, 1 - 0i, 1 - 0i, 1 - 0i, 1 - 0i,
+		0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i,
+		0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i,
+		0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i,
+		0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i,
+		0 + 0i, 0 + 0i,
 	}
 	//Apply Hanning Window
 	cmp1 = applyHanningWindow(matchedFilter(cmp1, match))
@@ -513,10 +513,7 @@ type Runnable struct {
 }
 
 type Packet struct {
-	Ch0 string `json:"0"`
-	Ch1 string `json:"1"`
-	Ch2 string `json:"2"`
-	Ch3 string `json:"3"`
+	Results []string `json:"results"`
 }
 
 func NewServer(host string, buf []complex128) *Remote {
