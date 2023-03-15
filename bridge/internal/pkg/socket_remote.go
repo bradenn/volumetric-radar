@@ -2,12 +2,16 @@ package pkg
 
 import (
 	"bridge/internal/infrastructure/log"
+	"bufio"
 	"encoding/json"
 	"fmt"
-	"github.com/gorilla/websocket"
+	fft2 "github.com/mjibson/go-dsp/fft"
 	"gonum.org/v1/gonum/dsp/fourier"
 	"gonum.org/v1/gonum/dsp/window"
 	"math"
+	"math/cmplx"
+	"net"
+	"os"
 	"sync"
 	"time"
 )
@@ -40,7 +44,7 @@ type UnitData struct {
 }
 
 const (
-	FrameDigest = 10000
+	FrameDigest = 33333 / 2
 	FrameRender = 33333
 )
 
@@ -62,7 +66,7 @@ type Unit struct {
 	Distance []float64 `json:"distance"`
 }
 
-const BufferSize = 4
+const BufferSize = 8
 const IncomingSize = 128
 
 type RemoteUnit struct {
@@ -77,7 +81,7 @@ type RemoteUnit struct {
 
 	index int
 
-	connection *websocket.Conn
+	connection *net.TCPConn
 	outbound   chan []byte
 	done       chan bool
 
@@ -88,14 +92,109 @@ type RemoteUnit struct {
 	address string
 }
 
+// Define the carrier frequency of the radar system
+const fc = 24.125e9
+
+func dopplerFFT(signal1, signal2 []complex128, sampleRate float64) []float64 {
+	// Calculate the time interval between the two received signals
+	deltaT := 1 / sampleRate
+
+	// Calculate the cross-correlation between the two received signals
+	correlation := crossCorrelation(signal1, signal2)
+
+	// Apply the FFT to the cross-correlation
+	ft := fft(correlation)
+
+	// Calculate the phase difference between the two received signals
+	phaseDifference := make([]float64, len(ft))
+	for i, val := range ft {
+		phaseDifference[i] = cmplx.Phase(val)
+	}
+
+	// Calculate the Doppler shift
+	dopplerShift := make([]float64, len(phaseDifference))
+	for i, val := range phaseDifference {
+		dopplerShift[i] = (val / (2 * math.Pi * deltaT)) * C / (2 * fc)
+	}
+
+	return dopplerShift
+}
+
+// Cross-correlation function
+func crossCorrelation(signal1, signal2 []complex128) []complex128 {
+	// Pad the signals to the same length
+	length := len(signal1) + len(signal2) - 1
+	signal1 = append(signal1, make([]complex128, length-len(signal1))...)
+	signal2 = append(signal2, make([]complex128, length-len(signal2))...)
+
+	// Apply the FFT to both signals
+	fft1 := fft(signal1)
+	fft22 := fft(signal2)
+
+	// Multiply the FFT of the two signals element-wise
+	mult := make([]complex128, length)
+	for i := 0; i < length; i++ {
+		mult[i] = fft1[i] * cmplx.Conj(fft22[i])
+	}
+
+	// Apply the inverse FFT to the result
+	return ifft(mult)
+}
+func rangeFFT(signal [][]complex128, sampleRate float64) []float64 {
+	// Calculate the time interval between samples
+	deltaT := 1 / sampleRate
+
+	// Apply the FFT to each range bin
+	fftSignal := make([]float64, len(signal[0]))
+	for i := 0; i < len(signal[0]); i++ {
+		// Apply a window function to the range bin
+		windowed := make([]complex128, len(signal))
+		for j := 0; j < len(signal); j++ {
+			windowed[j] = signal[j][i] * hammingWindow(len(signal[j]))
+		}
+
+		// Apply the FFT to the windowed range bin
+		fftB := fft2.FFT(windowed)
+
+		// Calculate the magnitude of the FFT and normalize it
+		magnitude := make([]float64, len(fftB))
+		for j, val := range fftB {
+			magnitude[j] = cmplx.Abs(val) / float64(len(fftB))
+		}
+
+		// Calculate the range of the target using the FFT result
+		rangeVal := (float64(i) / float64(len(signal[0]))) * (1 / (2 * deltaT * fc))
+		fftSignal[i] = magnitude[0] * math.Cos(2*math.Pi*fc*rangeVal)
+	}
+
+	return fftSignal
+}
+
+func hammingWindow(length int) complex128 {
+	alpha := 0.54
+	beta := 0.46
+	return complex(alpha-beta*math.Cos(2*math.Pi/float64(length-1)), 0)
+}
+
+// FFT function
+func fft(signal []complex128) []complex128 {
+	// Use the FFT function from the standard library
+	return fft2.FFT(signal)
+}
+
+// Inverse FFT function
+func ifft(signal []complex128) []complex128 {
+	// Use the inverse FFT function from the standard library
+	return fft2.IFFT(signal)
+}
 func (r *RemoteUnit) digest() {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	//r.Unit.Channels[0].SignalI = incoming[0]
-	//r.Unit.Channels[0].SignalQ = incoming[1]
-	//r.Unit.Channels[1].SignalI = incoming[2]
-	//r.Unit.Channels[1].SignalQ = incoming[3]
+	r.Unit.Channels[0].SignalI = r.dsp[0]
+	r.Unit.Channels[0].SignalQ = r.dsp[1]
+	r.Unit.Channels[1].SignalI = r.dsp[2]
+	r.Unit.Channels[1].SignalQ = r.dsp[3]
 
 	r.index = (r.index + 1) % BufferSize
 	if len(r.buffer[0]) < BufferSize*IncomingSize {
@@ -104,42 +203,52 @@ func (r *RemoteUnit) digest() {
 
 	cmp1 := r.buffer[0]
 	cmp2 := r.buffer[1]
-	cmp1 = window.HannComplex(cmp1)
-	cmp2 = window.HannComplex(cmp2)
+
 	fft := fourier.NewCmplxFFT(len(cmp1))
 
-	//cmp1 = fourier.CoefficientsRadix2(cmp1)
 	cmp1 = fft.Coefficients(nil, cmp1)
-	//cmp2 = fourier.CoefficientsRadix2(cmp2)
 	cmp2 = fft.Coefficients(nil, cmp2)
+	////cmp1 = fourier.CoefficientsRadix2(cmp1)
+	////cmp2 = fourier.CoefficientsRadix2(cmp2)
+	//
+	cmp1 = window.HammingComplex(cmp1)
+	cmp2 = window.HammingComplex(cmp2)
+	//
+
 	r.Unit.Phase = []float64{}
 	r.Unit.Distance = []float64{}
-	//for i, _ := range cmp2 {
-	//	deltaPhi := cmplx.Phase(cmp1[i] - cmp2[i])
-	//	theta := math.Asin(0.2257 * deltaPhi)
-	//	// Calculate the time interval between samples
-	//	//dt := 1.0 / 24.125e9
-	//
-	//	// Use the time interval and the angle estimate to estimate the distance to the object
-	//	//distance := dt * C / (2.0 * math.Sin(theta))
-	//	distance := 1.0
-	//
-	//	// Do something with the distance estimate, such as printing it to the console
-	//	if theta == math.NaN() {
-	//		continue
-	//	}
-	//	r.Unit.Distance = append(r.Unit.Distance, distance)
-	//	r.Unit.Phase = append(r.Unit.Phase, theta)
-	//}
+	for i := range cmp1 {
+		deltaPhi := cmplx.Phase(cmp2[i]) - cmplx.Phase(cmp1[i])
+		theta := math.Asin(0.2257 * deltaPhi)
+		// Calculate the time interval between samples
+		//dt := 1.0 / 24.125e9
+
+		// Use the time interval and the angle estimate to estimate the distance to the object
+		//distance := dt * C / (2.0 * math.Sin(theta))
+		distance := 1.0
+
+		// Do something with the distance estimate, such as printing it to the console
+		if theta == math.NaN() {
+			fmt.Println("sdds")
+			theta = 0
+		}
+
+		r.Unit.Phase = append(r.Unit.Phase, theta)
+		r.Unit.Distance = append(r.Unit.Distance, distance)
+	}
+
+	//correlation := crossCorrelatio	n(cmp1, cmp2)
 
 	r.Unit.Channels[0].Spectrum = []float64{}
 	for i := range cmp1 {
-		r.Unit.Channels[0].Spectrum = append(r.Unit.Channels[0].Spectrum, math.Sqrt(real(cmp1[i])*real(cmp1[i])+imag(cmp1[i])*imag(cmp1[i])))
+		val := math.Sqrt(real(cmp1[i])*real(cmp1[i]) + imag(cmp1[i])*imag(cmp1[i]))
+		r.Unit.Channels[0].Spectrum = append(r.Unit.Channels[0].Spectrum, val)
 	}
 
 	r.Unit.Channels[1].Spectrum = []float64{}
 	for i := range cmp2 {
-		r.Unit.Channels[1].Spectrum = append(r.Unit.Channels[1].Spectrum, math.Sqrt(real(cmp2[i])*real(cmp2[i])+imag(cmp2[i])*imag(cmp2[i])))
+		val := math.Sqrt(real(cmp2[i])*real(cmp2[i]) + imag(cmp2[i])*imag(cmp2[i]))
+		r.Unit.Channels[1].Spectrum = append(r.Unit.Channels[1].Spectrum, val)
 	}
 
 	//mx := -1.0
@@ -171,28 +280,28 @@ func (r *RemoteUnit) digest() {
 	//r.Unit.Channels[1].Spectrum = r.velocity[1]
 	r.Unit.Channels[1].Peaks = []float64{}
 	r.Unit.Channels[1].Frequencies = []float64{}
-
 	//
-	r.Unit.Channels[0].SignalI = []float64{}
-	r.Unit.Channels[0].SignalQ = []float64{}
-	cmp1i := fft.Sequence(nil, cmp1)
-	for i := range cmp1i {
-		r.Unit.Channels[0].SignalI = append(r.Unit.Channels[0].SignalI, real(cmp1i[i]))
-		r.Unit.Channels[0].SignalQ = append(r.Unit.Channels[0].SignalQ, imag(cmp1i[i]))
-	}
+	////
+	//r.Unit.Channels[0].SignalI = []float64{}
+	//r.Unit.Channels[0].SignalQ = []float64{}
+	//cmp1i := fft.Sequence(nil, cmp1)
+	//for i := range cmp1i {
+	//	r.Unit.Channels[0].SignalI = append(r.Unit.Channels[0].SignalI, real(cmp1i[i]))
+	//	r.Unit.Channels[0].SignalQ = append(r.Unit.Channels[0].SignalQ, imag(cmp1i[i]))
+	//}
+	//
+	//r.Unit.Channels[1].SignalI = []float64{}
+	//r.Unit.Channels[1].SignalQ = []float64{}
+	//cmp2i := fft.Sequence(nil, cmp2)
+	//for i := range cmp2i {
+	//	r.Unit.Channels[1].SignalI = append(r.Unit.Channels[1].SignalI, real(cmp2i[i]))
+	//	r.Unit.Channels[1].SignalQ = append(r.Unit.Channels[1].SignalQ, imag(cmp2i[i]))
+	//}
+	//
+	//r.Unit.Metadata.Window = len(cmp1)
 
-	r.Unit.Channels[1].SignalI = []float64{}
-	r.Unit.Channels[1].SignalQ = []float64{}
-	cmp2i := fft.Sequence(nil, cmp2)
-	for i := range cmp2i {
-		r.Unit.Channels[1].SignalI = append(r.Unit.Channels[1].SignalI, real(cmp2i[i]))
-		r.Unit.Channels[1].SignalQ = append(r.Unit.Channels[1].SignalQ, imag(cmp2i[i]))
-	}
-
-	r.Unit.Metadata.Window = len(cmp1i)
-
-	r.buffer[0] = []complex128{}
-	r.buffer[1] = []complex128{}
+	//r.buffer[0] = []complex128{}
+	//r.buffer[1] = []complex128{}
 
 }
 
@@ -218,11 +327,12 @@ func (r *RemoteUnit) tick() {
 }
 
 func (r *RemoteUnit) process(data []byte) {
-
+	//fmt.Println(string(data))
 	packet := Packet{}
 	err := json.Unmarshal(data, &packet)
 	if err != nil {
 		log.Err(err)
+		fmt.Println(string(data))
 		return
 	}
 
@@ -239,6 +349,11 @@ func (r *RemoteUnit) process(data []byte) {
 		r.start = time.Now()
 		r.total = 0
 	}
+
+	r.dsp[0] = incoming[0]
+	r.dsp[1] = incoming[1]
+	r.dsp[2] = incoming[2]
+	r.dsp[3] = incoming[3]
 
 	var cmp1 []complex128
 	var cmp2 []complex128
@@ -264,30 +379,34 @@ func (r *RemoteUnit) connect() error {
 	r.total = 0
 	// Initialize local variables
 	var err error
-	var conn *websocket.Conn
-	// Connect to the address
-	conn, _, err = websocket.DefaultDialer.Dial(r.address, nil)
+	addr, err := net.ResolveTCPAddr("tcp", "10.0.1.133:5545")
 	if err != nil {
+		fmt.Println(err)
 		return err
 	}
-	// Set the close handler to send a bool to the done channel
-	conn.SetCloseHandler(func(code int, text string) error {
-		r.done <- true
-		return nil
-	})
+
+	tcp, err := net.DialTCP("tcp", nil, addr)
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
 	// Send an initial ping message to being receiving
-	err = conn.WriteMessage(websocket.TextMessage, []byte("Ping!"))
+	_, err = tcp.Write([]byte("Hello"))
 	if err != nil {
+		fmt.Println(err)
 		return err
 	}
-	// Read the metadata response
-	_, data, err := conn.ReadMessage()
+	reply := make([]byte, 2048)
+
+	n, err := tcp.Read(reply)
 	if err != nil {
-		return err
+		println("Write to server failed:", err.Error())
+		os.Exit(1)
 	}
 	// Parse the metadata
 	unit := UnitData{}
-	err = json.Unmarshal(data, &unit)
+	err = json.Unmarshal(reply[0:n], &unit)
 	if err != nil {
 		return err
 	}
@@ -304,9 +423,10 @@ func (r *RemoteUnit) connect() error {
 		Chirp:     unit.Adc.Pulse,
 	}
 
-	log.Event("Unit '%s' @ %s connected", unit.Name, r.address)
+	fmt.Println(unit)
+	r.connection = tcp
 
-	r.connection = conn
+	log.Event("Unit '%s' @ %s connected", unit.Name, r.address)
 
 	go func() {
 		ticker := time.NewTicker(FrameRender * time.Microsecond)
@@ -333,14 +453,36 @@ func (r *RemoteUnit) connect() error {
 	return nil
 
 }
+func scanNullTerminatedJSON(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
 
-func (r *RemoteUnit) listen() {
-	for {
-		_, data, err := r.connection.ReadMessage()
-		if err != nil {
-			return
+	// find the null terminator
+	i := 0
+	for ; i < len(data); i++ {
+		if data[i] == 0 {
+			break
 		}
-		r.process(data)
+	}
+
+	if i == len(data) && !atEOF {
+		// need more data
+		return 0, nil, nil
+	}
+
+	return i + 1, data[:i], nil
+}
+func (r *RemoteUnit) listen() {
+
+	scanner := bufio.NewScanner(r.connection)
+	scanner.Split(scanNullTerminatedJSON)
+
+	for scanner.Scan() {
+		r.process(scanner.Bytes())
+	}
+	if scanner.Err() != nil {
+		fmt.Println("Scanner error:", scanner.Err())
 	}
 }
 

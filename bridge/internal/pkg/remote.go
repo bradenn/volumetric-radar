@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/gorilla/websocket"
-	"github.com/mjibson/go-dsp/fft"
+	fft_ "github.com/mjibson/go-dsp/fft"
 	"log"
 	"math"
 	"math/cmplx"
@@ -172,7 +172,7 @@ func (c *Channel) FFT(c2 Channel) []complex128 {
 	if len(cmp) != len(cmp1) {
 		return []complex128{}
 	}
-	fftOut := fft.FFT2([][]complex128{cmp, cmp1})
+	fftOut := fft_.FFT2([][]complex128{cmp, cmp1})
 	res := fftOut[0]
 
 	c.Spectrum = []float64{}
@@ -399,13 +399,13 @@ func (s *Remote) process() {
 	cmp2 = applyHanningWindow(matchedFilter(cmp1, match))
 
 	// Apply FFT
-	fft1 := fft.FFT(cmp1)
+	fft1 := fft_.FFT(cmp1)
 	channel0.Spectrum = []float64{}
 	for i := range fft1 {
 		channel0.Spectrum = append(channel0.Spectrum, cmplx.Abs(fft1[i]))
 	}
 
-	fft2 := fft.FFT(cmp2)
+	fft2 := fft_.FFT(cmp2)
 	channel1.Spectrum = []float64{}
 	for i := range fft2 {
 		channel1.Spectrum = append(channel1.Spectrum, cmplx.Abs(fft2[i]))
