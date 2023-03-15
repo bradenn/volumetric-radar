@@ -7,14 +7,19 @@
 #include <sstream>
 #include <esp_mac.h>
 #include <driver/gpio.h>
+#include <lwip/sockets.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/ringbuf.h"
 #include "server.h"
 #include "socket.h"
 #include "controller.h"
 
-#define RADAR_BASE_SAMPLE 83250
-#define RADAR_SAMPLES 3
+#define RADAR_BASE_SAMPLE 76800
+#define RADAR_SAMPLES 2
 #define RADAR_PULSE_DURATION 500 // us
 #define RADAR_PRF 1000
+static RingbufHandle_t buf_handle;
 
 static char *generateMetadata() {
     // Initialize a json object
@@ -125,59 +130,68 @@ static esp_err_t socket_get_handler(httpd_req_t *req) {
     return 0;
 }
 
-std::string uint32_to_hex_string(uint32_t num) {
-    char hex_string[9];
-    snprintf(hex_string, 9, "%08lx", num);
-    return std::string{hex_string};
+const char hexTable[] = "0123456789ABCDEF";
+
+void intArrayToHexString(const int *arr, int arrSize, char *outStr) {
+    // Allocate space for the hex string
+    int hexStrSize = BUFFER_SIZE * 2 + 1;
+    char hexStr[BUFFER_SIZE * 2 + 1] = {};
+    hexStr[hexStrSize - 1] = '\0'; // Null terminate the string
+    // Convert each int in the array to hex and concatenate it onto the hex string
+    int i;
+    for (i = 0; i < arrSize; i++) {
+        hexStr[i * 2] = hexTable[(arr[i] >> 4) & 0xF];
+        hexStr[i * 2 + 1] = hexTable[arr[i] & 0xF];
+    }
+
+    // Copy the hex string to the output string
+    strcpy(outStr, hexStr);
 }
 
-static void callback(uint16_t *arr[4], int opt[4], int n, int m) {
-    if (fd < 0) return;
+static void callback(int *arr[4]) {
+    if (fd < 0) {
+        vTaskDelay(1);
+        return;
+    }
     httpd_ws_frame_t out_packer;
     memset(&out_packer, 0, sizeof(httpd_ws_frame_t));
 
-    // Add a status key to the object
-    auto lo = cJSON_CreateObject();
-    auto st = esp_timer_get_time();
-    int b[BUFFER_SIZE];
+    auto obj = cJSON_CreateObject();
+    auto results = cJSON_CreateArray();
+    char hex_str[BUFFER_SIZE * 2 + 1];
     for (int i = 0; i < 4; i++) {
-        std::ostringstream oss("");
-        for (int j = 0; j < BUFFER_SIZE; j += i) {
-            b[i] = arr[i][j];
-//            uint16_t v1 = ;
-//            uint16_t v2 = arr[i][j + 1];
-//            uint32_t packed_values = ((v1 << 16) | v2);
-//            std::string hex_string = uint32_to_hex_string(packed_values);
-//            oss << hex_string;
-        }
-        cJSON_AddItemToObject(lo, std::to_string(i).c_str(), cJSON_CreateIntArray(b, BUFFER_SIZE));
+        intArrayToHexString(arr[i], BUFFER_SIZE, hex_str);
+        cJSON_AddItemToArray(results, cJSON_CreateString(hex_str));
     }
 
-    printf("Duration: %lld\n", (esp_timer_get_time() - st));
+    cJSON_AddItemToObject(obj, "results", results);
 
-    auto val = cJSON_PrintUnformatted(lo);
+    cJSON_AddItemToObject(obj, "time", cJSON_CreateNumber((double) esp_timer_get_time()));
 
-    out_packer.payload = (uint8_t *) val;
-    out_packer.len = strlen(val);
+    const int len = 1500; // Size of buffers in json
+    char out[len];
+
+    auto val = cJSON_PrintPreallocated(obj, out, len, false);
+    if (val == 0) {
+        cJSON_Delete(obj);
+        printf("A null string has been created...\n");
+        return;
+    }
+
+    out_packer.payload = (uint8_t *) out;
+    out_packer.len = strlen(out);
     out_packer.type = HTTPD_WS_TYPE_TEXT;
 
     // Delete the  object
-    cJSON_Delete(lo);
-
-    if (val == nullptr) {
-        printf("Packet craft failed!\n");
-        return;
-    }
+    cJSON_Delete(obj);
 
     auto ret = httpd_ws_send_frame_async(hd, fd, &out_packer);
     if (ret != ESP_OK) {
         printf("Send to bridge failed!\n");
-        cJSON_free(val);
         fd = -1;
         return;
     }
 
-    cJSON_free(val);
 }
 
 
@@ -195,42 +209,185 @@ static const httpd_uri_t options = {
         .is_websocket = false,
 };
 
-
-void fco(void *arg) {
-
-
-}
-
-
 void watcher(void *arg) {
-    Adc *adc = (Adc *) arg;
     while (1) {
 
-        if (adc == nullptr) {
+        size_t size = -1;
+
+        void *dat = xRingbufferReceive(buf_handle, &size, portMAX_DELAY);
+        if (size < 0) {
             vTaskDelay(1);
+//            vRingbufferReturnItem(buf_handle, dat);
             continue;
         }
 
-        uint16_t *ch0 = adc->buffers[0]->frontBuffer();
-        uint16_t *ch1 = adc->buffers[1]->frontBuffer();
-        uint16_t *ch2 = adc->buffers[2]->frontBuffer();
-        uint16_t *ch3 = adc->buffers[3]->frontBuffer();
-        if (ch0 != nullptr && ch1 != nullptr && ch2 != nullptr && ch3 != nullptr) {
-            uint16_t *bufs[4] = {ch0, ch1, ch2, ch3};
-            int *opt[4] = {nullptr};
-            callback(bufs, reinterpret_cast<int *>(opt), 4, 4);
-            adc->buffers[0]->popBuffer();
-            adc->buffers[1]->popBuffer();
-            adc->buffers[2]->popBuffer();
-            adc->buffers[3]->popBuffer();
+        int **data = (int **) dat;
 
+        callback(data);
 
-        } else {
-            vTaskDelay(1);
+        for (int i = 0; i < 4; ++i) {
+            free(data[i]);
         }
+
+        vRingbufferReturnItem(buf_handle, dat);
     }
 }
 
+void runServer(void *params) {
+
+    uint8_t rx[200];
+
+    while (1) {
+        struct sockaddr_in dest{
+                .sin_family = AF_INET,
+                .sin_port = htons(5545),
+                .sin_addr {
+                        .s_addr = htonl(INADDR_ANY),
+                },
+        };
+
+        int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+        if (sock < 0) {
+            printf("Socket creation failed...\n");
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+
+        printf("Socket Initialized...\n");
+
+        struct timeval timeout;
+        timeout.tv_sec = 0;
+        timeout.tv_usec = 1000 * 1000;
+        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
+
+        int err = bind(sock, (struct sockaddr *) &dest, sizeof(dest));
+        if (err < 0) {
+            printf("Socket bind failed... (%d)\n", err);
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+
+        err = listen(sock, 1);
+        if (err != 0) {
+            printf("listen failed... (%d)\n", err);
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+
+
+        printf("Socket Bound...\n");
+        int keepAlive = 1;
+        int keepIdle = 1;
+        int keepInterval = 1;
+        int keepCount = 1;
+        while (1) {
+
+            struct sockaddr_in sockAddr;
+            socklen_t sockLen = sizeof(sockAddr);
+            // Wait for a client to connect and send a message
+            int local = accept(sock, (struct sockaddr *) &sockAddr, &sockLen);
+            if (local < 0) {
+                vTaskDelay(1);
+                continue;
+            }
+
+            setsockopt(local, SOL_SOCKET, SO_KEEPALIVE, &keepAlive, sizeof(int));
+            setsockopt(local, IPPROTO_TCP, TCP_KEEPIDLE, &keepIdle, sizeof(int));
+            setsockopt(local, IPPROTO_TCP, TCP_KEEPINTVL, &keepInterval, sizeof(int));
+            setsockopt(local, IPPROTO_TCP, TCP_KEEPCNT, &keepCount, sizeof(int));
+
+            recv(sock, rx, sizeof(rx) - 1, 0);
+
+            auto metadata = generateMetadata();
+            err = send(local, metadata, strlen(metadata), MSG_WAITALL);
+            // If there was an error sending the buffer, break out of this loop and force reconnect
+            if (err < 0) {
+                printf("Send failed. (%d) %d\n", err, errno);
+                break;
+            }
+            cJSON_free(metadata);
+
+            // Run indefinitely while the client is connected
+            while (1) {
+                size_t size;
+                // Try to pull the next item from the ring, wait until something arrives
+                void *dat = xRingbufferReceive(buf_handle, &size, portMAX_DELAY);
+                // If there was an issue with the ring, wait a tick and try again
+                if (dat == nullptr) {
+                    vTaskDelay(1);
+                    continue;
+                }
+                // Cast the ring data to the double pointer array
+                int **data = (int **) dat;
+//                int start = esp_timer_get_time();
+                // Create a new JSON object to contain the outgoing buffers
+                auto obj = cJSON_CreateObject();
+                // Create an array to hold the individual buffers
+                auto results = cJSON_CreateArray();
+                // Allocate memory on the stack to contain the converted hex strings
+                char hex_str[BUFFER_SIZE * 2 + 1];
+                // For each channel, add a string of hex to the results array
+                for (int i = 0; i < 4; i++) {
+                    // Convert the pointer array into a hex buffer for transport
+                    if (data[i] == nullptr) {
+                        printf("nullio\n");
+                        continue;
+                    }
+                    intArrayToHexString(data[i], BUFFER_SIZE, hex_str);
+                    // Add the string to the results array
+                    cJSON_AddItemToArray(results, cJSON_CreateString(hex_str));
+                }
+                // Add the results array to the JSON object
+                cJSON_AddItemToObject(obj, "results", results);
+                // Add the current time since system boot to the JSON object
+                cJSON_AddItemToObject(obj, "time", cJSON_CreateNumber((double) esp_timer_get_time()));
+                // Allocate memory to contain the exported JSON buffer
+                const int len = 1500; // Size of buffers in json
+                char out[len];
+                // Print the JSON array out into the stack array
+                auto val = cJSON_PrintPreallocated(obj, out, len, false);
+                // Free all memory used to create the JSON object
+                cJSON_Delete(obj);
+                // If the JSON export operation fails, cleanup and quietly move on
+                if (val == 0) {
+                    // Print out a warning for context
+                    printf("A null string has been created...\n");
+                    // Proceed back to the beginning of the innermost while loop
+                    continue;
+                }
+                // Free all the channel buffers
+                for (int i = 0; i < 4; ++i) {
+                    if (data[i] != nullptr) free(data[i]);
+                }
+//                printf("Duration: %lld\n", (esp_timer_get_time() - start));
+                // Return the ring handle to the ring
+                vRingbufferReturnItem(buf_handle, dat);
+                // Try sending the JSON buffer to the client
+                int rawLength = (int) strlen(out);
+                int messageLength = rawLength + 1;
+                out[rawLength] = '\0';
+                int toWrite = messageLength;
+                bool willExit = false;
+                while (toWrite > 0) {
+                    int n = send(local, out + (messageLength - toWrite), toWrite, 0);
+                    if (n < 0) {
+                        willExit = true;
+                        break;
+                    }
+                    toWrite -= n;
+                }
+                if (willExit) {
+                    close(local);
+                    break;
+                }
+            }
+
+            close(sock);
+        }
+
+    }
+
+}
 
 Server::Server() {
 
@@ -239,16 +396,16 @@ Server::Server() {
     }
 
     server = nullptr;
-    config = HTTPD_DEFAULT_CONFIG();
-
-    esp_err_t ret = httpd_start(&server, &config);
-    if (ESP_OK != ret) {
-        return;
-    }
-
-
-    httpd_register_uri_handler(server, &options);
-    httpd_register_uri_handler(server, &socket_get);
+//    config = HTTPD_DEFAULT_CONFIG();
+//
+//    esp_err_t ret = httpd_start(&server, &config);
+//    if (ESP_OK != ret) {
+//        return;
+//    }
+//
+//
+//    httpd_register_uri_handler(server, &options);
+//    httpd_register_uri_handler(server, &socket_get);
     AdcConfig conf = {
             .sampling{
                     .rate = RADAR_BASE_SAMPLE,
@@ -260,9 +417,17 @@ Server::Server() {
                     .ports = {3, 4, 5, 6}
             }
     };
-    adc = new Adc(conf);
-    new Controller(adc);
 
-    xTaskCreate(watcher, "adcWatch", 4096 * 4, adc, 5, nullptr);
+
+    //Create ring buffer
+
+    buf_handle = xRingbufferCreate((sizeof(int *) * 4) * 16, RINGBUF_TYPE_NOSPLIT);
+    if (buf_handle == nullptr) {
+        printf("Failed to create ring buffer\n");
+    }
+
+    adc = new Adc(conf, buf_handle);
+    new Controller(adc);
+    xTaskCreate(runServer, "adcWatch", 4096 * 4, nullptr, tskIDLE_PRIORITY + 4, nullptr);
 
 }

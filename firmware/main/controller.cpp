@@ -4,7 +4,6 @@
 
 #include <esp_timer.h>
 #include <driver/gpio.h>
-#include <driver/pulse_cnt.h>
 #include <rom/ets_sys.h>
 #include "controller.h"
 
@@ -22,18 +21,19 @@
 // Chirp
 void timerTask(void *arg) {
     gpio_set_level(GPIO_NUM_9, 1);
-    vTaskDelay(pdMS_TO_TICKS(50/1000.0));
+    usleep(651); // 2604.16666667us for 384 Hz
+//    vTaskDelay(pdMS_TO_TICKS(50.0/1000.0));
     gpio_set_level(GPIO_NUM_9, 0);
 }
 
 
-static bool example_pcnt_on_reach(pcnt_unit_handle_t unit, const pcnt_watch_event_data_t *edata, void *user_ctx) {
-    BaseType_t high_task_wakeup;
-    QueueHandle_t queue = (QueueHandle_t) user_ctx;
-    // send event data to queue, from this interrupt callback
-    xQueueSendFromISR(queue, &(edata->watch_point_value), &high_task_wakeup);
-    return (high_task_wakeup == pdTRUE);
-}
+//static bool example_pcnt_on_reach(pcnt_unit_handle_t unit, const pcnt_watch_event_data_t *edata, void *user_ctx) {
+//    BaseType_t high_task_wakeup;
+//    QueueHandle_t queue = (QueueHandle_t) user_ctx;
+//    // send event data to queue, from this interrupt callback
+//    xQueueSendFromISR(queue, &(edata->watch_point_value), &high_task_wakeup);
+//    return (high_task_wakeup == pdTRUE);
+//}
 
 Controller::Controller(Adc *adc) {
     esp_err_t err;
@@ -46,7 +46,7 @@ Controller::Controller(Adc *adc) {
     //bit mask of the pins that you want to set,e.g.GPIO18/19
     io_conf.pin_bit_mask = 1ULL << GPIO_NUM_9;
     //disable pull-down mode
-    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
     //disable pull-up mode
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
     //configure GPIO with the given settings
@@ -90,7 +90,7 @@ Controller::Controller(Adc *adc) {
             .name = "chirpTask",
     };
     esp_timer_create(&chirpArgs, &chirpTimer);
-    esp_timer_start_periodic((esp_timer_handle_t) chirpTimer, 200);
+    esp_timer_start_periodic((esp_timer_handle_t) chirpTimer, 1302);
 
 //    esp_timer_handle_t counterTimer;
 //    esp_timer_create_args_t counterArgs = {

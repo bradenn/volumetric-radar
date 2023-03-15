@@ -6,6 +6,7 @@
 #define VOLUMETRIC_RADAR_ADC_H
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/ringbuf.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_adc/adc_continuous.h"
@@ -37,7 +38,7 @@ typedef struct AdcConfig {
 class Adc {
 public:
 
-    Adc(AdcConfig conf);
+    Adc(AdcConfig conf, RingbufHandle_t rb);
 
     static void begin(void * params);
 
@@ -46,11 +47,13 @@ public:
         return conf;
     };
 
-    Buffer *buffers[ADC_NUM_CHANNELS]{};
+    Buffer *buffers[5]{};
 
 private:
 
     AdcConfig conf;
+
+    RingbufHandle_t rb;
 
     int numSamples;
     int bufferSize;
@@ -69,6 +72,7 @@ private:
     double capPerSec = 0;
 
 
+    static void adcTask(void *arg);
 };
 
 

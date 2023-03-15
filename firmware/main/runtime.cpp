@@ -25,6 +25,13 @@ Runtime::Runtime() {
     p.readString(NVS_KEY_SSID, ssid);
     char passwd[33];
     p.readString(NVS_KEY_PASSWD, passwd);
+
+    if (strcmp("unset", ssid) == 0) {
+        printf("Using DEBUG Wi-Fi credentials. Remove definitions to resume normal operation.\n");
+        strcpy(ssid, CONFIG_vRADAR_WIFI_SSID);
+        strcpy(passwd, CONFIG_vRADAR_WIFI_PASS);
+    }
+
     auto net = Network::instance();
     esp_err_t err;
     Indicator::instance().setPulsing(LINK, true);

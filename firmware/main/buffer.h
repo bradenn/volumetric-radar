@@ -7,9 +7,10 @@
 
 #include <cstdint>
 #include <deque>
+#include <freertos/semphr.h>
 
-#define BUFFER_SIZE 256
-#define BUFFER_COUNT 24
+#define BUFFER_SIZE 128
+#define BUFFER_COUNT 8
 
 using std::deque;
 
@@ -21,21 +22,22 @@ public:
 
     void nextBuffer();
 
-    void popBuffer();
+    void pop();
 
     bool hasNext();
 
-    uint16_t *frontBuffer();
+    int *front();
 
-    void push(uint16_t value);
+    void push(int value);
 
     int numBuffers();
 
 private:
 
     int index = 0;
-    deque<uint16_t *> buffer{};
-    uint16_t *current = nullptr;
+    deque<int *> buffer{};
+    int *current = nullptr;
+    SemaphoreHandle_t mutex;
 
     void initBuffer();
 

@@ -1,5 +1,12 @@
 menu "vRadar Rev2"
 
+    config vRADAR_WIFI_SSID
+        string "WIFI SSID"
+        default "ssid"
+    config vRADAR_WIFI_PASS
+        string "WIFI PASSWORD"
+        default "password"
+
     config vRADAR_INDICATOR_S1
         int "The S1 indicator GPIO port."
         default 13
