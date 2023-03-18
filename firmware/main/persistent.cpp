@@ -47,4 +47,16 @@ Persistent &Persistent::instance() {
     return the_instance;
 }
 
+void Persistent::writeInt(const char *key, int32_t value) const {
+    ESP_ERROR_CHECK(nvs_set_i32(handle, key, value));
+}
+
+void Persistent::readInt(const char *key, int32_t *dest, int32_t defaultValue) const {
+    esp_err_t err = nvs_get_i32(handle, key, dest);
+    if(err == ESP_ERR_NVS_NOT_FOUND) {
+        nvs_set_i32(handle, key, defaultValue);
+    }
+
+}
+
 

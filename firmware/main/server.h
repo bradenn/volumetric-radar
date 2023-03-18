@@ -31,7 +31,6 @@ public:
 private:
 
     httpd_handle_t server{};
-    httpd_config_t config{};
 
 };
 
