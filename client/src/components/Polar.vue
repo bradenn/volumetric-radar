@@ -87,11 +87,14 @@ function drawRad(ctx: CanvasRenderingContext2D, w: number, h: number, r: number,
 
   let maxT = -1
   let minT = 1
-
+  let values;
   if(props.t) {
+    values = props.t
     // let runs = 20
-    maxT = Math.max(...props.t)
-    minT = Math.min(...props.t)
+    maxT = Math.max(...values)
+    state.max = maxT
+    minT = Math.min(...values)
+    state.min = minT
     // if (!runningMin.get(0)) {
     //   runningMin.set(0, [])
     // }
@@ -106,25 +109,22 @@ function drawRad(ctx: CanvasRenderingContext2D, w: number, h: number, r: number,
   }
 
   if (props.pings && props.t) {
+    let pings = props.pings
     let avg = 0
-    for (let i = 0; i < props.pings.length; i++) {
-      let deg = props.pings[i] * (180/Math.PI);
-      let dist = Math.max(map_range(props.t[i], minT, maxT, 0, (r - 1) * slice), 0)
-      let angle = deg
+    for (let i = 0; i < pings.length; i++) {
+      let deg = (Math.PI * 2) / 2 - ((Math.PI * 2) / pings.length) * i
+      let dist = map_range(pings[i], minT, maxT, ((r - 1) * slice) / 8, (r - 1) * slice)
+      let angle = deg * 10
       let labelX = Math.cos(degToRad(angleCenter + angle)) * dist
       let labelY = Math.sin(degToRad(angleCenter + angle)) * dist
-      avg += props.pings[i]
-      ctx.beginPath()
-      ctx.moveTo(offsetX, offsetY)
-      ctx.lineTo(offsetX + labelX + 5, offsetY +labelY + 5)
-      ctx.stroke();
-      ctx.closePath()
+      avg += pings[i]
+
       // ctx.fillText(dist, offsetX + labelX - me.width / 2, offsetY + labelY);
-      ctx.fillRect(offsetX + labelX, offsetY +labelY, 10, 10)
+      ctx.fillRect(offsetX + labelX, offsetY + labelY, 10, 10)
     }
 
-    avg/=props.pings.length
-    let labelX = Math.cos(degToRad(angleCenter + avg*(180/Math.PI))) * (r - 4 / 1.5) * slice
+    avg /= pings.length
+    let labelX = Math.cos(degToRad(angleCenter + avg * (180 / Math.PI))) * (r - 4 / 1.5) * slice
     let labelY = Math.sin(degToRad(angleCenter + avg*(180/Math.PI))) * (r - 4 / 1.5) * slice
     // ctx.fillText(dist, offsetX + labelX - me.width / 2, offsetY + labelY);
     ctx.fillRect(offsetX + labelX, offsetY +labelY, 20, 20)
@@ -316,6 +316,14 @@ function drawPattern(ctx: CanvasRenderingContext2D, t: number[], r: number[], de
           <div class="d-flex gap-2 tag label">
             <div>&Delta;f</div>
             <div>{{ props.delta }}&deg;</div>
+          </div>
+          <div class="d-flex gap-2 tag label">
+            <div>min</div>
+            <div>{{ state.min }}&deg;</div>
+          </div>
+          <div class="d-flex gap-2 tag label">
+            <div>max</div>
+            <div>{{ state.max }}&deg;</div>
           </div>
         </div>
       </div>

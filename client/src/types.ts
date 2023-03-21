@@ -31,9 +31,12 @@ export interface Unit {
         base: number // 80000Hz
         window: number // 80000Hz
         samples: number   // 8Hz
+        prf: number   // 8Hz
+        connected: boolean   // 8Hz
         frequency: number   // 10000Hz
         chirp: number // 1000Hz (once per ms)
     }
+    rate: number
     phase: number[]
     distance: number[]
 }

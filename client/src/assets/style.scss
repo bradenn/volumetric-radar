@@ -11,7 +11,7 @@ body {
   filter: drop-shadow(0px 10px 60px rgba(0, 0, 0, 0.1));
   transform: translate3d(0, 0, 0);
   background-color: hsla(214, 9%, 28%, 0.3);
-  color: rgba(255,255,255,0.7);
+  color: rgba(255, 255, 255, 0.7);
   box-shadow: inset 0 0 2px 0.5px rgba(255, 255, 255, 0.125) !important;
   border-radius: 10px;
   padding: 12px 18px;
@@ -72,9 +72,11 @@ $fontWeights: (
     font-weight: $i;
   }
 }
+
 .label-mono {
   font-family: "JetBrains Mono", monospace;
 }
+
 /* Label Opacities */
 $fontColors: (
         "0": 0,
@@ -125,6 +127,23 @@ $accent: rgba(255, 128, 10);
   font-size: 0.9rem;
   //color: rgba(255, 255, 255, 0.6);
 
+}
+
+.label-success {
+  color: rgb(48, 209, 88, 0.8);
+}
+
+.label-warning {
+  color: rgb(255, 128, 12, 0.8);
+}
+
+.element-fg {
+  //color: rgba(255, 255, 255, 0.7);
+  padding: 6px 10px;
+  background-color: hsla(214, 9%, 28%, 0.15);
+  border-radius: 4px;
+  min-width: 3rem;
+  box-shadow: inset 0 0 2px 0.5px rgba(255, 255, 255, 0.125) !important;
 }
 
 .tag {

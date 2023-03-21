@@ -1,7 +1,7 @@
 <script setup lang="ts">
 
 
-import {onMounted, onUnmounted, reactive, watchEffect} from "vue";
+import {onMounted, onUnmounted, reactive} from "vue";
 import {v4 as uuidv4} from "uuid";
 
 interface Datatype {
@@ -11,8 +11,8 @@ interface Datatype {
 }
 
 let props = defineProps<Datatype>();
-const cols = 2048
-const rows = 10
+const cols = 100
+const rows = props.values0.length
 const maxBuff = rows * cols
 
 const state = reactive({
@@ -61,6 +61,8 @@ function configureCanvas() {
   state.canvas.width = state.canvas.clientWidth * scale
   state.ctx.canvas.height = state.canvas.clientHeight * scale
   state.canvas.height = state.canvas.clientHeight * scale
+
+  // state.ctx.clearRect(0, 0,   state.ctx.canvas.width, state.ctx.canvas.height);
 
   draw()
 }
@@ -145,31 +147,30 @@ function resampleData(data: number[], targetWidth: number): number[] {
   return data;
 }
 
-watchEffect(() => {
-  let vs = props.values0.map(a => a)
-  state.buffers[0].unshift(...vs)
-
-  state.buffers[0] = state.buffers[0].slice(0, maxBuff)
-  // state.high.push(Math.max(...newBuf))
-  // state.low.push(Math.min(...newBuf))
-
-
-  return props.values0
-})
+//
+// watchEffect(() => {
+//
+//   state.buffers[0] = props.values0.slice(0, maxBuff)
+//   // state.high.push(Math.max(...newBuf))
+//   // state.low.push(Math.min(...newBuf))
+//
+//
+//   return props.values0
+// })
 
 
 function draw() {
   let ctx = state.ctx;
   if (!ctx.canvas) return
   ctx.lineWidth = 2
-
-  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-  // drawLegend()
   let w = ctx.canvas.width;
   let h = ctx.canvas.height;
+  // ctx.clearRect(0, 0, w, h);
 
-  drawPattern(ctx, state.buffers[0], 'rgba(255,128,10,1)', h / 2 - h / 4)
-  // drawPattern(ctx, state.buffers[1], 'rgba(255,128,10,1)', h / 2 + h / 4)
+  // // drawLegend()
+
+
+  drawPattern(ctx, props.values0, 'rgba(255,128,10,1)', h / 2 - h / 4)
 }
 
 
@@ -180,7 +181,7 @@ function map_range(value: number, low1: number, high1: number, low2: number, hig
 let runningMin: number[] = []
 let runningMax: number[] = []
 
-
+let displacement = 0;
 function drawPattern(ctx: CanvasRenderingContext2D, values: number[], color: string, yLevel: number) {
 
   let minY = 0
@@ -188,14 +189,13 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number[], color: str
 
   let adj = values
 
-  minY = Math.min(...adj);
-  state.min = Math.round(minY * 100) / 100;
-  maxY = Math.max(...adj) / 2;
-  runningMin.unshift(minY)
-  runningMax.unshift(maxY)
-  let runs = rows*20
-  minY = runningMin.slice(0, runs).reduce((a, b) => b + a) / runs
-  maxY = runningMax.slice(0, runs).reduce((a, b) => b + a) / runs
+  minY = Math.min(...values);
+  maxY = Math.max(...values);
+  // runningMin.unshift(minY)
+  // runningMax.unshift(maxY)
+  // let runs = 10
+  // minY = runningMin.slice(0, runs).reduce((a, b) => b + a) / runs
+  // maxY = runningMax.slice(0, runs).reduce((a, b) => b + a) / runs
 
 
   ctx.lineWidth = 1
@@ -205,20 +205,50 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number[], color: str
   let w = ctx.canvas.width;
   let h = ctx.canvas.height;
 
-  ctx.beginPath()
+  // ctx.beginPath()
 
   let dx = w / cols;
   let dy = h / rows;
-
-  for (let i = 0; i < rows; i++) {
-    for (let j = 0; j < cols; j++) {
-      let x = j * dx;
-      let y = i * dy;
-      let h = map_range(adj[j + i * cols], 0, maxY, 0, 1)
-      ctx.fillStyle = `hsl(${(h * 360)%360}, 50%, 50%)`;
-      ctx.fillRect(x, y, dx, dy)
-    }
+  if (displacement <= 0) {
+    ctx.save()
   }
+  // let id = ctx.getImageData(0, 0, w, h);
+  // let pixels = id.data;
+  // state.buffers.unshift(props.values0)
+  // if (state.buffers.length >= rows) {
+  //   state.buffers = state.buffers.slice(0, rows)
+  // }
+  ctx.translate(dx, 0)
+  displacement += dx;
+  // console.log(displacement)
+  if (displacement >= w) {
+    ctx.restore()
+    displacement = 0
+  }
+  //
+  // for (let i = 0; i < rows; i++) {
+  //   if (state.buffers.length <= i) break
+  let rowSet = resampleData(props.values0, rows);
+  for (let j = 0; j < rows; j++) {
+    // let x = Math.floor(map_range(i, 0, state.buffers[j].length, 0, w))
+    // let y = Math.floor(map_range(j, 0, state.buffers.length, 0, h))
+    let e = map_range(rowSet[j], minY, maxY, 0, 1)
+    // let r = 255 * e
+    // let g = 255 - e * 255
+    // let b = 255 * e
+    // let off = (y * id.width + x) * 4;
+    // pixels[off] = r;
+    // pixels[off + 1] = g;
+    // pixels[off + 2] = b;
+    // pixels[off + 3] = 255;
+    ctx.fillStyle = `hsl(${e * 360}, 50%, 50%)`;
+    ctx.fillRect(0, j * dy, dx, dy)
+
+  }
+
+  // }
+
+  // state.ctx.putImageData(id, 0, 0);
 
   // for (let i = 1; i < adj.length; i++) {
   //
@@ -228,7 +258,7 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number[], color: str
   //   lastY = y;
   // }
   // ctx.stroke()
-  ctx.closePath()
+  // ctx.closePath()
 }
 
 </script>

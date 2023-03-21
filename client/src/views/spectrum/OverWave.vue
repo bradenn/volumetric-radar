@@ -1,7 +1,7 @@
 <script setup lang="ts">
 
 
-import {onMounted, onUnmounted, reactive, watchEffect} from "vue";
+import {onMounted, onUnmounted, reactive} from "vue";
 import {v4 as uuidv4} from "uuid";
 
 interface Datatype {
@@ -20,11 +20,12 @@ const state = reactive({
   lastFew: [] as number[][],
   canvas: {} as HTMLCanvasElement,
   ctx: {} as CanvasRenderingContext2D,
-  min: 0,
-  max: 0,
+  min: new Map<number, number>(),
+  max: new Map<number, number>(),
   maxIndex: 0,
   buffers: [[], [], [], []] as number[][],
   top: [] as number[],
+  fade: [] as number[],
   avgOffset: 2,
   uuid: uuidv4(),
   currentTime: 0,
@@ -144,29 +145,12 @@ function resampleData(data: number[], targetWidth: number): number[] {
   return data;
 }
 
-watchEffect(() => {
-  let vs = props.values0.map(a => a)
-  vs.push(...state.buffers[0])
-  state.buffers[0] = vs.slice(0, maxBuff)
-
-  return props.values0
-})
-
-watchEffect(() => {
-  let vs = props.values1.map(a => a) as number[]
-  state.buffers[1].unshift(...vs)
-
-  state.buffers[1] = state.buffers[1].slice(0, maxBuff)
-
-  return props.values1
-})
-
 function draw() {
   let ctx = state.ctx;
   if (!ctx.canvas) return
   ctx.lineWidth = 2
 
-  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  // ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   // drawLegend()
   let w = ctx.canvas.width;
   let h = ctx.canvas.height;
@@ -187,9 +171,16 @@ function draw() {
   //   ctx.closePath()
   // }
 
+  state.buffers[0] = props.values0
+  state.buffers[1] = props.values1
+
+  ctx.fillStyle = "rgba(0,0,0,0.8)"
+  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
 
   drawPattern(ctx, 0, 'rgba(255,128,10,1)', h / 2 - h / 4)
   drawPattern(ctx, 1, 'rgba(255,128,10,1)', h / 2 + h / 4)
+
+
 }
 
 
@@ -200,6 +191,19 @@ function map_range(value: number, low1: number, high1: number, low2: number, hig
 
 let runningMin: Map<number, number[]> = new Map<number, number[]>()
 let runningMax: Map<number, number[]> = new Map<number, number[]>()
+
+function summarizeSignal(signal: number[], n: number): number[] {
+  const chunkSize = Math.ceil(signal.length / n);
+  const result: number[] = [];
+
+  for (let i = 0; i < signal.length; i += chunkSize) {
+    const chunk = signal.slice(i, i + chunkSize);
+    const sum = chunk.reduce((a, b) => a + b, 0);
+    result.push(sum / chunkSize);
+  }
+
+  return result;
+}
 
 function drawPattern(ctx: CanvasRenderingContext2D, values: number, color: string, yLevel: number) {
 
@@ -214,20 +218,18 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number, color: strin
     runningMax.set(values, [])
   }
 
-  let adj = props.resample?resampleData(state.buffers[values], ctx.canvas.width):state.buffers[values]
+  let adj = props.resample ? summarizeSignal(state.buffers[values], ctx.canvas.width) : state.buffers[values]
   minY = Math.min(...adj);
-  state.min = Math.round(minY * 100) / 100;
-  maxY = Math.max(...adj) / 2;
+  state.min.set(values, Math.round(minY * 100) / 100)
+  maxY = Math.max(...adj);
+  state.max.set(values, Math.round(maxY * 100) / 100)
   runningMin.get(values)?.unshift(minY)
   runningMax.get(values)?.unshift(maxY)
   let runs = 100
   minY = (runningMin.get(values)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
   maxY = (runningMax.get(values)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
 
-
-  state.max = Math.round(maxY * 100) / 100;
-
-  maxY = Math.max(maxY, 1)
+  // maxY = Math.max(maxY, 1)
 
   ctx.lineWidth = 1
   ctx.strokeStyle = color;
@@ -262,15 +264,12 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number, color: strin
       <div style="height: 2rem" class="d-flex gap-1 justify-content-between w-100">
         <div class="d-flex gap-2 label d-flex flex-row align-items-center px-2">{{ props.name }} <span
             class="text-muted">I: {{ state.buffers[0].length }} Q: {{ state.buffers[1].length }}</span></div>
-        <div class="d-flex gap-1 ">
+        <div v-for="item in Array(state.min.size).keys()" class="d-flex gap-1 ">
           <div class="d-flex gap-2 tag label">
-            <div>􀆇</div>
-            <div>{{ state.max }} mV</div>
+            <div>{{ state.max.get(item) }} mV /</div>
+            <div>{{ state.min.get(item) }} mV</div>
           </div>
-          <div class="d-flex gap-2 tag label">
-            <div>􀆈</div>
-            <div>{{ state.min }} mV</div>
-          </div>
+
 
         </div>
       </div>

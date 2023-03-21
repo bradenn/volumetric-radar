@@ -31,7 +31,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-
+  state.canvas.remove()
 })
 
 function animate() {
@@ -92,16 +92,16 @@ function draw() {
   ctx.lineTo(w, h / 1.25)
   ctx.stroke()
   ctx.closePath()
-  if(!props.spectrum) return;
+  if (!props.spectrum) return;
   let scale = w / props.spectrum.length;
 
-  for (let i = 0; i < props.spectrum.length; i++) {
-    ctx.beginPath()
-    ctx.moveTo(i * scale, h / 1.25 - 2)
-    ctx.lineTo(i * scale, h / 1.25 + 2)
-    ctx.stroke()
-    ctx.closePath()
-  }
+  // for (let i = 0; i < props.spectrum.length; i++) {
+  //   ctx.beginPath()
+  //   ctx.moveTo(i * scale, h / 1.25 - 2)
+  //   ctx.lineTo(i * scale, h / 1.25 + 2)
+  //   ctx.stroke()
+  //   ctx.closePath()
+  // }
 
 
   drawPattern(ctx, props.spectrum, -1, false)
@@ -112,14 +112,31 @@ function map_range(value: number, low1: number, high1: number, low2: number, hig
   return low2 + (high2 - low2) * (value - low1) / (high1 - low1);
 }
 
+let runningMin: Map<number, number[]> = new Map<number, number[]>()
+let runningMax: Map<number, number[]> = new Map<number, number[]>()
+
 function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: number, useRelative: boolean) {
 
   let minY = 0
   let maxY = 50
+
+  if (!runningMin.get(0)) {
+    runningMin.set(0, [])
+  }
+
+  if (!runningMax.get(0)) {
+    runningMax.set(0, [])
+  }
+
+  // values = resampleData(values, ctx.canvas.width);
   minY = Math.min(...values);
   state.min = Math.round(minY * 100) / 100;
   maxY = Math.max(...values);
-  state.max = Math.round(maxY * 100) / 100;
+  runningMin.get(0)?.unshift(minY)
+  runningMax.get(0)?.unshift(maxY)
+  let runs = 1
+  minY = (runningMin.get(0)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
+  maxY = (runningMax.get(0)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
 
   let w = ctx.canvas.width;
   let h = ctx.canvas.height;
@@ -141,14 +158,14 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: num
     lastX = x;
     lastY = y;
   }
-
-  if(props.frequencies && props.lut) {
-  state.top = props.frequencies.map(f => props.lut[f])
+  ctx.stroke()
+  ctx.closePath()
+  if (props.frequencies && props.lut) {
+    state.top = props.frequencies.map(f => props.lut[f])
   }
 
-  ctx.closePath()
-  ctx.stroke()
-  ctx.fill()
+
+  // ctx.fill()
   // ctx.fillStyle = 'rgba(255,255,255, 0.75)';
   // ctx.strokeStyle = 'rgba(255,255,255, 0.25)';
   // ctx.font = "20px JetBrains Mono"
@@ -179,7 +196,7 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: num
         <div class="d-flex gap-2 label d-flex flex-row align-items-center px-2">{{ props.name }} <span
             class="text-muted">0-{{ props.spectrum?.length }}</span></div>
         <div class="d-flex gap-1 ">
-          <div v-for="i in state.top.slice(0,1)" class="d-flex gap-2 tag tag label">
+          <div v-for="i in state.top.slice(0,4)" class="d-flex gap-2 tag tag label">
             <div>Freq.</div>
             <div>{{ i }} Hz</div>
           </div>
@@ -222,7 +239,7 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: num
   flex-direction: row;
   justify-content: center;
   width: 100%;
-  height:10rem;
+  height: 20rem;
   align-items: center;
 
 }
