@@ -182,25 +182,28 @@ const char hexTable[] = "0123456789ABCDEF";
 
 void intArrayToHexString(const int *arr, int arrSize, char *outStr) {
     // Allocate space for the hex string
-    int hexStrSize = BUFFER_SIZE * 2 + 1;
-    char hexStr[BUFFER_SIZE * 2 + 1] = {};
+    const int chars = 3;
+    int hexStrSize = BUFFER_SIZE * chars + 1;
+    char hexStr[BUFFER_SIZE * chars + 1] = {};
     hexStr[hexStrSize - 1] = '\0'; // Null terminate the string
     // Convert each int in the array to hex and concatenate it onto the hex string
     int i;
     for (i = 0; i < arrSize; i++) {
-        hexStr[i * 2] = hexTable[(arr[i] >> 4) & 0xF];
-        hexStr[i * 2 + 1] = hexTable[arr[i] & 0xF];
+        hexStr[i * chars] = hexTable[(arr[i] >> 8) & 0xF];
+        hexStr[i * chars + 1] = hexTable[(arr[i] >> 4) & 0xF];
+        hexStr[i * chars + 2] = hexTable[arr[i] & 0xF];
     }
 
     // Copy the hex string to the output string
     strcpy(outStr, hexStr);
 }
+
 bool generatePacket(char *dst, int buffer, int **data, int m, int n) {
     auto obj = cJSON_CreateObject();
     // Create an array to hold the individual buffers
     auto results = cJSON_CreateArray();
     // Allocate memory on the stack to contain the converted hex strings
-    char hex_str[BUFFER_SIZE * 2 + 1];
+    char hex_str[BUFFER_SIZE * 3 + 1];
     // For each channel, add a string of hex to the results array
     for (int i = 0; i < m; i++) {
         // Convert the pointer array into a hex buffer for transport
@@ -230,7 +233,7 @@ bool generatePacket(char *dst, int buffer, int **data, int m, int n) {
 }
 
 
-static void callback(int *arr[4]) {
+static void callback(int *arr[5]) {
     if (fd < 0) {
         vTaskDelay(1);
         return;
@@ -259,9 +262,9 @@ static void callback(int *arr[4]) {
 //        printf("A null string has been created...\n");
 //        return;
 //    }
-    const int len = 4 * (BUFFER_SIZE * 2) + 512; // Size of buffers in json
+    const int len = 5 * (BUFFER_SIZE * 8) + 512; // Size of buffers in json
     char out[len];
-    if(!generatePacket(out, len, arr, 4, BUFFER_SIZE)) {
+    if (!generatePacket(out, len, arr, 5, BUFFER_SIZE)) {
         printf("Packet generation failed.\n");
     }
     out_packer.payload = (uint8_t *) out;
@@ -323,7 +326,7 @@ void watcher(void *arg) {
 
         callback(data);
 
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < 5; ++i) {
             free(data[i]);
         }
 
@@ -422,7 +425,7 @@ void runServer(void *params) {
                 // Create a new JSON object to contain the outgoing buffers
                 const int len = 4 * (BUFFER_SIZE * 2) + 512; // Size of buffers in json
                 char out[len];
-                if(!generatePacket(out, len, data, 4, BUFFER_SIZE)) {
+                if (!generatePacket(out, len, data, 4, BUFFER_SIZE)) {
                     printf("Packet generation failed.\n");
                 }
                 // Free all the channel buffers
@@ -500,13 +503,13 @@ Server::Server() {
 
     //Create ring buffer
 
-    buf_handle = xRingbufferCreate((sizeof(int *) * 4) * 16, RINGBUF_TYPE_NOSPLIT);
+    buf_handle = xRingbufferCreate((sizeof(int *) * 5) * 16, RINGBUF_TYPE_NOSPLIT);
     if (buf_handle == nullptr) {
         printf("Failed to create ring buffer\n");
     }
 
     adc = new Adc(conf, buf_handle);
     new Controller(adc, s->sampling.prf, s->sampling.pulse);
-    xTaskCreatePinnedToCore(watcher, "adcWatch", 4096 * 3, nullptr, tskIDLE_PRIORITY + 4, nullptr, 0);
+    xTaskCreatePinnedToCore(watcher, "adcWatch", 4096 * 4, nullptr, tskIDLE_PRIORITY + 4, nullptr, 0);
 
 }

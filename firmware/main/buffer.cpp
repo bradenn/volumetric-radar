@@ -33,7 +33,18 @@ int Buffer::numBuffers() {
 void Buffer::initBuffer() {
     int *next = (int *) malloc(BUFFER_SIZE * sizeof(int));
     if (next == nullptr) {
-        printf("Failed to allocated memory for new buffer\n");
+        printf("Failed to allocated memory for new buffer. Dumping front buffer.\n");
+        int *fr = buffer.front();
+        if (fr != nullptr) {
+            buffer.pop_front();
+            free(fr);
+
+            next = (int *) malloc(BUFFER_SIZE * sizeof(int));
+            if (next != nullptr) {
+                current = next;
+            }
+
+        }
     } else {
         current = next;
     }

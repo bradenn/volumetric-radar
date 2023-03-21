@@ -16,15 +16,13 @@ class Controller {
 public:
 
 
-    Controller(Adc *adc);
+    Controller(Adc *adc, uint32_t prf, uint32_t pulse);
 
 
 private:
 
 
-
-
-
+    Controller(Adc *adc);
 };
 
 
