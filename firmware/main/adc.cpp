@@ -5,68 +5,178 @@
 #include <esp_timer.h>
 #include <cstring>
 #include <esp_adc/adc_cali_scheme.h>
+#include <driver/pulse_cnt.h>
+#include <hal/gpio_types.h>
+#include <cmath>
+#include <driver/gptimer.h>
+#include <driver/gpio.h>
 #include "adc.h"
 
 static TaskHandle_t s_task_handle;
 SemaphoreHandle_t adcMutex;
 
-uint64_t micros() {
+static QueueHandle_t clockQueue;
+static pcnt_unit_handle_t pcnt_unit = nullptr;
+
+struct counterCase {
+    int pulses = 0;
+    int duration = 0;
+};
+
+int64_t micros() {
     return esp_timer_get_time();
 }
 
+static double run = 0.0;
+static int rate = 0.0;
+static int cycle = 0;
+
+//void Adc::counterTask(void *arg) {
+//    auto adc = (Adc *) arg;
+//    struct counterCase c{};
+//
+//    while (1) {
+//        if (xQueueReceive(clockQueue, &c, portMAX_DELAY)) {
+//                rate = (int) round(((double)c.pulses/((double)c.duration/1000.0/1000.0))*1000);
+////            printf("%f\n", ((double)c.pulses/((double)c.duration/1000.0/1000.0)));
+////            cycle = (cycle + 1) % 1;
+//        }
+//    }
+//}
+
 void Adc::adcTask(void *arg) {
     auto adc = (Adc *) arg;
-    while (true) {
-        xSemaphoreTake(adcMutex, portMAX_DELAY);
-        // DO stuff
-        int *mk[4] = {};
-        bool all = true;
-        for (int j = 0; j < adc->conf.channels.count; ++j) {
-            int *front = adc->buffers[j]->front();
-            if (front == nullptr && adc->buffers[j]->numBuffers() < 2) {
-                all = false;
-            } else {
-                mk[j] = front;
-            }
-        }
 
-        if (all) {
-            if (xRingbufferSend(adc->rb, &mk, sizeof(mk), 0) == pdTRUE) {
-                for (int j = 0; j < adc->conf.channels.count; ++j) {
-                    adc->buffers[j]->pop();
-                }
+    uint64_t ready = xRingbufferGetCurFreeSize(adc->rb);
+    if (ready < 5 * 4 * 4) {
+        return;
+    }
+
+    if (xSemaphoreTake(adcMutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+    // DO stuff
+    int *mk[5] = {};
+    bool all = true;
+    for (int j = 0; j < adc->conf.channels.count + 1; ++j) {
+        int *front = adc->buffers[j]->front();
+        if (front == nullptr) {
+            all = false;
+        } else {
+            mk[j] = front;
+        }
+    }
+    if (all) {
+        if (xRingbufferSend(adc->rb, &mk, sizeof(mk), 0) == pdTRUE) {
+            for (int j = 0; j < adc->conf.channels.count + 1; ++j) {
+                adc->buffers[j]->pop();
             }
         }
-        xSemaphoreGive(adcMutex);
-        vTaskDelay(1);
     }
+    xSemaphoreGive(adcMutex);
+
 }
 
+//static uint64_t previous = micros();
+//
+//static bool fdo_counter(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx) {
+//    BaseType_t high_task_awoken = pdFALSE;
+//
+//    int pulses = 0;
+//    int ref = 0;
+//    int now = (int) micros();
+//
+//    ESP_ERROR_CHECK(pcnt_unit_get_count(pcnt_unit, &ref));
+//    pulses = ref;
+//
+//    ESP_ERROR_CHECK(pcnt_unit_clear_count(pcnt_unit));
+//
+//    auto q = (QueueHandle_t) user_ctx;
+//    auto c = counterCase{
+//            .pulses = pulses,
+//            .duration = (int) (micros() - previous)
+//    };
+//    rate = pulses;
+//    previous = now;
+//
+//    xQueueSendFromISR(q, &c, &high_task_awoken);
+//    // return whether we need to yield at the end of ISR
+//    return false;
+//}
 
 Adc::Adc(AdcConfig conf, RingbufHandle_t rb) : conf(conf) {
-
+    printf("%d @ %d\n", conf.sampling.rate, conf.sampling.subSamples);
     this->rb = rb;
 
     // Set the sample bytes to the number of samples per measurement * bytes per measurement * number of channels
     numSamples = conf.sampling.subSamples * SOC_ADC_DIGI_DATA_BYTES_PER_CONV * conf.channels.count;
 
     // Define the buffer size as being large enough to contain a sample set from all channels
-    bufferSize = numSamples;
+    bufferSize = numSamples * 4;
     adcMutex = xSemaphoreCreateMutex();
 
-    xTaskCreatePinnedToCore(begin, "adcRunner", BUFFER_SIZE * BUFFER_COUNT * 4 + 4096, this, tskIDLE_PRIORITY + 2,
-                            nullptr, 1);
+    xTaskCreatePinnedToCore(begin, "adcRunner", BUFFER_SIZE * BUFFER_COUNT * 4 + 4096, this, tskIDLE_PRIORITY + 5,
+                            &runner, 1);
 
-//    esp_timer_handle_t watchTask;
-//    esp_timer_create_args_t chirpArgs = {
-//            .callback = reinterpret_cast<esp_timer_cb_t>(adcTask),
-//            .arg = this,
-//            .name = "adcTimerTask",
+    esp_timer_handle_t chirpTimer;
+    esp_timer_create_args_t chirpArgs = {
+            .callback = adcTask,
+            .arg = this,
+            .name = "adcTimer",
+    };
+    esp_timer_create(&chirpArgs, &chirpTimer);
+    esp_timer_start_periodic((esp_timer_handle_t) chirpTimer, 4 * 1000);
+
+
+//    pcnt_unit_config_t unit_config = {
+//            .low_limit = -16000,
+//            .high_limit = 16000,
 //    };
-//    esp_timer_create(&chirpArgs, &watchTask);
-//    esp_timer_start_periodic((esp_timer_handle_t) watchTask, 1000*50);
-    xTaskCreatePinnedToCore(adcTask, "adcTimer", 4096, this, tskIDLE_PRIORITY + 1,
-                            nullptr, 1);
+//
+//    ESP_ERROR_CHECK(pcnt_new_unit(&unit_config, &pcnt_unit));
+//
+//
+//    pcnt_chan_config_t chan_a_config = {
+//            .edge_gpio_num = GPIO_NUM_8,
+//            .level_gpio_num = -1,
+//    };
+//    pcnt_channel_handle_t pcnt_chan_a = NULL;
+//    ESP_ERROR_CHECK(pcnt_new_channel(pcnt_unit, &chan_a_config, &pcnt_chan_a));
+//
+//    ESP_ERROR_CHECK(pcnt_channel_set_edge_action(pcnt_chan_a, PCNT_CHANNEL_EDGE_ACTION_INCREASE,
+//                                                 PCNT_CHANNEL_EDGE_ACTION_INCREASE));
+//
+//    clockQueue = xQueueCreate(1, sizeof(counterCase));
+//    ESP_ERROR_CHECK(pcnt_unit_enable(pcnt_unit));
+//    ESP_ERROR_CHECK(pcnt_unit_clear_count(pcnt_unit));
+//    ESP_ERROR_CHECK(pcnt_unit_start(pcnt_unit));
+//
+//    xTaskCreate(counterTask, "clockWatcher", 4096, this, tskIDLE_PRIORITY + 2, nullptr);
+//
+//    gptimer_handle_t gptimer = NULL;
+//    gptimer_config_t timer_config = {
+//            .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+//            .direction = GPTIMER_COUNT_UP,
+//            .resolution_hz = 10 * 1000 * 1000, // 1MHz, 1 tick = 1us
+//    };
+//    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
+//
+//    gptimer_alarm_config_t alarm_config = {
+//            .alarm_count = 1000*10, // period = 1s @resolution 1MHz
+//            .reload_count = 0, // counter will reload with 0 on alarm event
+//            .flags {
+//                    .auto_reload_on_alarm = true, // enable auto-reload
+//            }
+//    };
+//    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config));
+//
+//    gptimer_event_callbacks_t cbs = {
+//            .on_alarm = fdo_counter, // register user callback
+//    };
+//
+//    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, clockQueue));
+//    ESP_ERROR_CHECK(gptimer_enable(gptimer));
+//    ESP_ERROR_CHECK(gptimer_start(gptimer));
 
 }
 
@@ -119,9 +229,9 @@ void Adc::setup(adc_continuous_handle_t *out_handle) {
     }
     // Set the local handle to the main filter
     *out_handle = localHandle;
-    int samplesSec = conf.sampling.rate / conf.sampling.subSamples;
     int channels = conf.channels.count;
-    printf("ADC Configured: %d samples/sec * %d channels (%d B/s)\n", samplesSec, channels, samplesSec * channels * 4);
+    int samplesSec = (conf.sampling.rate / channels) / conf.sampling.subSamples;
+    printf("ADC Configured: %d samples/sec * %d channels\n", samplesSec, channels);
 }
 
 static bool IRAM_ATTR
@@ -156,12 +266,29 @@ void Adc::begin(void *params) {
     adc->buffers[1] = new Buffer();
     adc->buffers[2] = new Buffer();
     adc->buffers[3] = new Buffer();
+    adc->buffers[4] = new Buffer();
+
+    esp_err_t err;
+    //zero-initialize the config structure.
+    gpio_config_t io_conf = {};
+    //disable interrupt
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    //set as output mode
+    io_conf.mode = GPIO_MODE_INPUT;
+    //bit mask of the pins that you want to set,e.g.GPIO18/19
+    io_conf.pin_bit_mask = 1ULL << GPIO_NUM_10;
+    //disable pull-down mode
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    //disable pull-up mode
+    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+    //configure GPIO with the given settings
+    gpio_config(&io_conf);
 
     adc->running = true;
 
 
     uint32_t read = 0;
-    uint8_t result[128] = {0};
+    uint8_t result[512] = {0};
     memset(result, 0xcc, 128);
 
     s_task_handle = xTaskGetCurrentTaskHandle();
@@ -173,7 +300,7 @@ void Adc::begin(void *params) {
             .on_conv_done = s_conv_done_cb,
     };
 
-    esp_err_t err;
+
     err = adc_continuous_register_event_callbacks(adc->handle, &cbs, nullptr);
     if (err != ESP_OK) {
         printf("ADC Register failed!\n");
@@ -197,17 +324,13 @@ void Adc::begin(void *params) {
         printf("ADC Calibration failed!\n");
     }
     adc->running = true;
-    int cycles = 0;
-    int ejections = 0;
-    int start = (int) micros();
+
+    int64_t start = micros();
     while (adc->running) {
 
-        ulTaskNotifyTake(pdTRUE, 1);
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
         while (true) {
-            int sumBuffer[ADC_MAX_CHANNELS] = {0};
-            int sumSums[ADC_MAX_CHANNELS] = {0};
-
             err = adc_continuous_read(adc->handle, result, adc->bufferSize, &read, 0);
             if (err == ESP_ERR_INVALID_STATE) {
                 printf("Bad state\n");
@@ -215,28 +338,40 @@ void Adc::begin(void *params) {
             } else if (err != ESP_OK) {
                 break;
             }
-            xSemaphoreTake(adcMutex, portMAX_DELAY);
-            for (int i = 0; i < read; i += SOC_ADC_DIGI_RESULT_BYTES) {
-                auto *out = (adc_digi_output_data_t *) &result[i];
-                uint32_t channel = out->type2.channel;
-                uint32_t value = out->type2.data;
 
-                int j = CHANNEL_TO_INDEX(channel);
+            if (xSemaphoreTake(adcMutex, portMAX_DELAY) == pdTRUE) {
+                for (int i = 0; i < read; i += SOC_ADC_DIGI_RESULT_BYTES) {
+                    auto *out = (adc_digi_output_data_t *) &result[i];
+                    uint32_t channel = out->type2.channel;
+                    uint32_t value = out->type2.data;
 
-                if (j < 0 || j >= 4) {
-                    continue;
+                    int j = CHANNEL_TO_INDEX(channel);
+
+                    if (j < 0 || j >= 4) {
+                        continue;
+                    }
+                int v = 0;
+                adc_cali_raw_to_voltage(calHandle, makeSigned(value), &v);
+//                sampleBuffer[j] += makeSigned(value);
+//                sampleCount[j] += 1;
+                    adc->buffers[j]->push(v);
+                    // Push the current timing rate for reference
+                    if (j == 0) {
+                        adc->buffers[4]->push(gpio_get_level(GPIO_NUM_10)*128);
+                    }
+//                    ejections++;
                 }
-//                int v = 0;
-//                adc_cali_raw_to_voltage(calHandle, makeSigned(value), &v);
 
-                adc->buffers[j]->push(makeSigned(value));
-//                sumBuffer[j] += makeSigned(value);
-//                sumSums[j] += 1;
-                ejections++;
 
+//                cycles++;
+                xSemaphoreGive(adcMutex);
             }
-            xSemaphoreGive(adcMutex);
-            cycles++;
+
+//                for (int j = 0; j < adc->conf.channels.count; ++j) {
+//                    if (sampleCount[j] > 0) {
+//                        adc->buffers[j]->push(sampleBuffer[j]);
+//                    }
+//                }
 
 //            int *mk[4] = {};
 //            bool all = true;
@@ -263,43 +398,25 @@ void Adc::begin(void *params) {
 //                    }
 //                }
 //            }
-
-            if (micros() - start > 1000 * 1000) {
-                double duration = ((double) (micros() - start) / 1000.0 / 1000.0);
-                printf("%.2f cycle/s,  %.2f reading/s - %lu -> %lu %lu -> ",
-                       (double) ((double) cycles / duration),
-                       (double) ((double) ejections / duration), read, esp_get_minimum_free_heap_size(),
-                       esp_get_free_heap_size());
-                for (int j = 0; j < adc->conf.channels.count; ++j) {
-                    printf("b[%d] = %d, ", j, adc->buffers[j]->numBuffers());
-                }
-                printf("\n");
-                cycles = 0;
-                ejections = 0;
-                start = (int) micros();
-            }
+//
+//            if (micros() - start > 1000 * 1000) {
+//                double duration = ((double) (micros() - start) / 1000.0 / 1000.0);
+////                printf("ADC: %.2f fps, %.2f samples/s | %lu | %lu B",
+////                       (double) ((double) cycles / duration),
+////                       (double) ((double) ejections / duration), read, esp_get_minimum_free_heap_size());
+////                for (int j = 0; j < adc->conf.channels.count; ++j) {
+////                    printf("b[%d] = %d, ", j, adc->buffers[j]->numBuffers());
+////                }
+////                printf("\n");
+//                cycles = 0;
+//                ejections = 0;
+//                start = micros();
+//            }
 
         }
 
     }
-    printf("ADC Shutting down components...\n");
-    err = adc_cali_delete_scheme_curve_fitting(calHandle);
-    if (err != ESP_OK) {
-        printf("ADC delete scheme failed!\n");
-        return;
-    }
 
-    err = adc_continuous_stop(adc->handle);
-    if (err != ESP_OK) {
-        printf("ADC Register failed!\n");
-        return;
-    }
-
-    err = adc_continuous_deinit(adc->handle);
-    if (err != ESP_OK) {
-        printf("ADC Register failed!\n");
-        return;
-    }
 
 }
 
@@ -309,6 +426,25 @@ void Adc::capture(int us) {
 
     }
     this->cap = 0;
+}
+
+Adc::~Adc() {
+    esp_err_t err;
+    printf("ADC Shutting down components...\n");
+    err = adc_continuous_stop(handle);
+    if (err != ESP_OK) {
+        printf("ADC Register failed!\n");
+        return;
+    }
+
+    err = adc_continuous_deinit(handle);
+    if (err != ESP_OK) {
+        printf("ADC Register failed!\n");
+        return;
+    }
+    vTaskSuspend(runner);
+    vTaskSuspend(watcher);
+
 }
 
 

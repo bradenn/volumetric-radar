@@ -40,18 +40,25 @@ public:
 
     Adc(AdcConfig conf, RingbufHandle_t rb);
 
-    static void begin(void * params);
+    ~Adc();
+
+    static void begin(void *params);
 
     void capture(int us);
+
     AdcConfig getConfig() {
         return conf;
     };
 
     Buffer *buffers[5]{};
 
+    static void counterTask(void *arg);
+
 private:
 
     AdcConfig conf;
+
+    TaskHandle_t runner{}, watcher{};
 
     RingbufHandle_t rb;
 
@@ -73,6 +80,7 @@ private:
 
 
     static void adcTask(void *arg);
+
 };
 
 
