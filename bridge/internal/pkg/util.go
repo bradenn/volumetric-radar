@@ -6,15 +6,16 @@ import (
 )
 
 func hexStringToIntArray(hexStr string) []float64 {
+	numChars := 3
 	// Determine the length of the int array
-	intArrLen := len(hexStr) / 2
+	intArrLen := len(hexStr) / numChars
 
 	// Allocate space for the int array
 	intArr := make([]float64, intArrLen)
 
 	// Convert each pair of hex digits to an int and store it in the array
 	for i := 0; i < intArrLen; i++ {
-		hexPair := hexStr[i*2 : i*2+2]
+		hexPair := hexStr[i*numChars : i*numChars+numChars]
 		hexInt, err := strconv.ParseInt(hexPair, 16, 64)
 		if err != nil {
 			return intArr
@@ -22,7 +23,6 @@ func hexStringToIntArray(hexStr string) []float64 {
 
 		intArr[i] = float64(int(hexInt))
 	}
-
 	return intArr
 }
 
@@ -70,7 +70,7 @@ func BinToFreq(binIndex, fftSize int, sweepRate, chirpDuration float64) float64 
 }
 
 const C = 299792458
-const Fs = 250e6
+const Fs = 24.125e9
 
 func unpackArray(hexString string) []float64 {
 	packedValues := make([]float64, 0)

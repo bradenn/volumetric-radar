@@ -514,6 +514,7 @@ type Runnable struct {
 
 type Packet struct {
 	Results []string `json:"results"`
+	Time    int64    `json:"time"`
 }
 
 func NewServer(host string, buf []complex128) *Remote {

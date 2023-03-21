@@ -45,6 +45,7 @@ func (s *SocketClient) close() error {
 }
 
 func (s *SocketClient) send(data []byte) {
+
 	err := s.conn.WriteMessage(websocket.TextMessage, data)
 	if err != nil {
 		return

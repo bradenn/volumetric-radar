@@ -2,16 +2,12 @@ package pkg
 
 import (
 	"bridge/internal/infrastructure/log"
-	"bufio"
 	"encoding/json"
 	"fmt"
-	fft2 "github.com/mjibson/go-dsp/fft"
+	"github.com/gorilla/websocket"
 	"gonum.org/v1/gonum/dsp/fourier"
-	"gonum.org/v1/gonum/dsp/window"
 	"math"
 	"math/cmplx"
-	"net"
-	"os"
 	"sync"
 	"time"
 )
@@ -19,14 +15,17 @@ import (
 type Metadata struct {
 	Name      string  `json:"name"`
 	Mac       string  `json:"mac"`
+	Connected bool    `json:"connected"`
 	Base      int     `json:"base"`
 	Samples   int     `json:"samples"`
 	Window    int     `json:"window"`
 	Frequency float64 `json:"frequency"`
+	Prf       int     `json:"prf"`
 	Chirp     int     `json:"chirp"`
 	XFov      int     `json:"xFov"`
 	YFov      int     `json:"yFov"`
 }
+
 type UnitData struct {
 	Name string `json:"name"`
 	Mac  string `json:"mac"`
@@ -37,6 +36,7 @@ type UnitData struct {
 		Base      float64 `json:"base"`
 		Frequency float64 `json:"frequency"`
 		Samples   int     `json:"samples"`
+		Prf       int     `json:"prf"`
 		Window    int     `json:"window"`
 		Bits      int     `json:"bits"`
 		Pulse     int     `json:"pulse"`
@@ -44,8 +44,8 @@ type UnitData struct {
 }
 
 const (
-	FrameDigest = 33333 / 2
-	FrameRender = 33333
+	FrameDigest = 1000
+	FrameRender = 16777 * 2
 )
 
 type Diagnostic struct {
@@ -57,6 +57,7 @@ type Diagnostic struct {
 		Absolute int `json:"inbound"`
 		Slice    int `json:"outbound"`
 	} `json:"temporal"`
+	Rate float64 `json:"rate"`
 }
 
 type Unit struct {
@@ -64,15 +65,34 @@ type Unit struct {
 	Metadata Metadata  `json:"metadata"`
 	Phase    []float64 `json:"phase"`
 	Distance []float64 `json:"distance"`
+	Rate     float64   `json:"rate"`
 }
 
-const BufferSize = 8
-const IncomingSize = 128
+const PRF = 1000
+const Pulse = 500
+const SampleRate = 83333 / 4
+
+const BufferSize = 16
+const IncomingSize = 256
+const Frame = BufferSize * IncomingSize
+
+func calculateRange(freq float64) float64 {
+	frequency := freq
+	sweepTime := 250e-6
+	c := 2.99e8
+	sweepBandwidth := 100e6
+
+	// calculate the range using the voltage difference and the speed of light
+	rangeMeters := (frequency * sweepTime * c) / (2 * sweepBandwidth)
+
+	return rangeMeters
+}
 
 type RemoteUnit struct {
 	Unit Unit
 
-	mutex sync.RWMutex
+	mutex   sync.RWMutex
+	display sync.RWMutex
 
 	buffer   map[int][]complex128
 	velocity map[int][]float64
@@ -81,235 +101,256 @@ type RemoteUnit struct {
 
 	index int
 
-	connection *net.TCPConn
+	connection *websocket.Conn
 	outbound   chan []byte
 	done       chan bool
 
 	total int
-	start time.Time
+	start int64
 	rate  float64
 
 	address string
 }
 
-// Define the carrier frequency of the radar system
-const fc = 24.125e9
+func stretchProcessing(signal []complex128) []complex128 {
+	// Calculate the FFT of the signal
+	cFFT := fourier.NewCmplxFFT(len(signal))
+	sFFT := cFFT.Coefficients(nil, signal)
 
-func dopplerFFT(signal1, signal2 []complex128, sampleRate float64) []float64 {
-	// Calculate the time interval between the two received signals
-	deltaT := 1 / sampleRate
-
-	// Calculate the cross-correlation between the two received signals
-	correlation := crossCorrelation(signal1, signal2)
-
-	// Apply the FFT to the cross-correlation
-	ft := fft(correlation)
-
-	// Calculate the phase difference between the two received signals
-	phaseDifference := make([]float64, len(ft))
-	for i, val := range ft {
-		phaseDifference[i] = cmplx.Phase(val)
+	// Define a chirp signal with a linear frequency sweep
+	chirp := make([]complex128, len(signal))
+	for i := range chirp {
+		t := float64(i) / float64(len(chirp))
+		chirp[i] = complex(real(sFFT[i])*math.Cos(2*math.Pi*t), -imag(sFFT[i])*math.Sin(2*math.Pi*t))
 	}
 
-	// Calculate the Doppler shift
-	dopplerShift := make([]float64, len(phaseDifference))
-	for i, val := range phaseDifference {
-		dopplerShift[i] = (val / (2 * math.Pi * deltaT)) * C / (2 * fc)
-	}
+	// Calculate the IFFT of the chirp signal
+	stretched := cFFT.Sequence(nil, chirp)
 
-	return dopplerShift
+	return stretched
 }
 
-// Cross-correlation function
-func crossCorrelation(signal1, signal2 []complex128) []complex128 {
-	// Pad the signals to the same length
-	length := len(signal1) + len(signal2) - 1
-	signal1 = append(signal1, make([]complex128, length-len(signal1))...)
-	signal2 = append(signal2, make([]complex128, length-len(signal2))...)
+func fmcwFFT(fft []complex128) {
+	n := len(fft)
+	half := n / 2
+	for i := 0; i < half; i++ {
+		fft[i], fft[i+half] = fft[i+half], fft[i]
+	}
+}
 
-	// Apply the FFT to both signals
-	fft1 := fft(signal1)
-	fft22 := fft(signal2)
-
-	// Multiply the FFT of the two signals element-wise
-	mult := make([]complex128, length)
-	for i := 0; i < length; i++ {
-		mult[i] = fft1[i] * cmplx.Conj(fft22[i])
+func downsample(input []float64, n int) []float64 {
+	if len(input) <= n {
+		// nothing to downsample, return the input as is
+		return input
 	}
 
-	// Apply the inverse FFT to the result
-	return ifft(mult)
-}
-func rangeFFT(signal [][]complex128, sampleRate float64) []float64 {
-	// Calculate the time interval between samples
-	deltaT := 1 / sampleRate
+	output := make([]float64, n)
 
-	// Apply the FFT to each range bin
-	fftSignal := make([]float64, len(signal[0]))
-	for i := 0; i < len(signal[0]); i++ {
-		// Apply a window function to the range bin
-		windowed := make([]complex128, len(signal))
-		for j := 0; j < len(signal); j++ {
-			windowed[j] = signal[j][i] * hammingWindow(len(signal[j]))
+	// compute the downsample factor
+	factor := float64(len(input)) / float64(n)
+
+	for i := 0; i < n; i++ {
+		// compute the start and end indices of the input signal to be averaged
+		start := int(math.Floor(float64(i) * factor))
+		end := int(math.Floor(float64(i+1) * factor))
+
+		// compute the average of the input signal over the current range
+		sum := 0.0
+		count := 0
+		for j := start; j < end; j++ {
+			sum += input[j]
+			count++
 		}
-
-		// Apply the FFT to the windowed range bin
-		fftB := fft2.FFT(windowed)
-
-		// Calculate the magnitude of the FFT and normalize it
-		magnitude := make([]float64, len(fftB))
-		for j, val := range fftB {
-			magnitude[j] = cmplx.Abs(val) / float64(len(fftB))
-		}
-
-		// Calculate the range of the target using the FFT result
-		rangeVal := (float64(i) / float64(len(signal[0]))) * (1 / (2 * deltaT * fc))
-		fftSignal[i] = magnitude[0] * math.Cos(2*math.Pi*fc*rangeVal)
+		output[i] = sum / float64(count)
 	}
 
-	return fftSignal
+	return output
 }
 
-func hammingWindow(length int) complex128 {
-	alpha := 0.54
-	beta := 0.46
-	return complex(alpha-beta*math.Cos(2*math.Pi/float64(length-1)), 0)
-}
+var minHz = 10000.0
+var maxHz = -10000.0
 
-// FFT function
-func fft(signal []complex128) []complex128 {
-	// Use the FFT function from the standard library
-	return fft2.FFT(signal)
-}
-
-// Inverse FFT function
-func ifft(signal []complex128) []complex128 {
-	// Use the inverse FFT function from the standard library
-	return fft2.IFFT(signal)
-}
 func (r *RemoteUnit) digest() {
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
-
-	r.Unit.Channels[0].SignalI = r.dsp[0]
-	r.Unit.Channels[0].SignalQ = r.dsp[1]
-	r.Unit.Channels[1].SignalI = r.dsp[2]
-	r.Unit.Channels[1].SignalQ = r.dsp[3]
-
 	r.index = (r.index + 1) % BufferSize
-	if len(r.buffer[0]) < BufferSize*IncomingSize {
+	r.mutex.Lock()
+	if len(r.buffer[0]) < BufferSize*IncomingSize || len(r.buffer[1]) < BufferSize*IncomingSize {
+		r.mutex.Unlock()
 		return
 	}
 
+	//fmt.Printf("Min: %.4f, Max: %.4f\n", minHz, maxHz)
+
 	cmp1 := r.buffer[0]
+	h1 := cmp1
 	cmp2 := r.buffer[1]
+	h2 := cmp2
+	r.mutex.Unlock()
 
-	fft := fourier.NewCmplxFFT(len(cmp1))
-
-	cmp1 = fft.Coefficients(nil, cmp1)
-	cmp2 = fft.Coefficients(nil, cmp2)
-	////cmp1 = fourier.CoefficientsRadix2(cmp1)
-	////cmp2 = fourier.CoefficientsRadix2(cmp2)
-	//
-	cmp1 = window.HammingComplex(cmp1)
-	cmp2 = window.HammingComplex(cmp2)
-	//
-
-	r.Unit.Phase = []float64{}
-	r.Unit.Distance = []float64{}
-	for i := range cmp1 {
-		deltaPhi := cmplx.Phase(cmp2[i]) - cmplx.Phase(cmp1[i])
-		theta := math.Asin(0.2257 * deltaPhi)
-		// Calculate the time interval between samples
-		//dt := 1.0 / 24.125e9
-
-		// Use the time interval and the angle estimate to estimate the distance to the object
-		//distance := dt * C / (2.0 * math.Sin(theta))
-		distance := 1.0
-
-		// Do something with the distance estimate, such as printing it to the console
-		if theta == math.NaN() {
-			fmt.Println("sdds")
-			theta = 0
-		}
-
-		r.Unit.Phase = append(r.Unit.Phase, theta)
-		r.Unit.Distance = append(r.Unit.Distance, distance)
+	unit := Unit{
+		Channels: make([]Channel, 2),
+		Metadata: r.Unit.Metadata,
 	}
 
-	//correlation := crossCorrelatio	n(cmp1, cmp2)
-
-	r.Unit.Channels[0].Spectrum = []float64{}
-	for i := range cmp1 {
-		val := math.Sqrt(real(cmp1[i])*real(cmp1[i]) + imag(cmp1[i])*imag(cmp1[i]))
-		r.Unit.Channels[0].Spectrum = append(r.Unit.Channels[0].Spectrum, val)
-	}
-
-	r.Unit.Channels[1].Spectrum = []float64{}
-	for i := range cmp2 {
-		val := math.Sqrt(real(cmp2[i])*real(cmp2[i]) + imag(cmp2[i])*imag(cmp2[i]))
-		r.Unit.Channels[1].Spectrum = append(r.Unit.Channels[1].Spectrum, val)
-	}
-
-	//mx := -1.0
-	//for _, f := range r.Unit.Channels[0].Spectrum {
-	//	if f > mx {
-	//		mx = f
+	unit.Channels[0].SignalI = []float64{}
+	unit.Channels[0].SignalQ = []float64{}
+	unit.Channels[1].SignalI = []float64{}
+	unit.Channels[1].SignalQ = []float64{}
+	unit.Phase = []float64{}
+	unit.Distance = []float64{}
+	//for i := range cmp1 {
+	//	fd := cmplx.Phase(cmp1[i]) - cmplx.Phase(cmp2[i])
+	//	fs := math.Asin(fd * 0.2257)
+	//	if fs != math.NaN() {
+	//		unit.Phase = append(unit.Phase, fs)
 	//	}
 	//}
+
+	//data := analyze(cmp1, cmp2)
+
+	//filter
+
+	cFFT := fourier.NewCmplxFFT(len(cmp1))
+	cmp1 = cFFT.Coefficients(nil, cmp1)
+	cmp2 = cFFT.Coefficients(nil, cmp2)
+
+	//fmcwFFT(cmp1)
+	//fmcwFFT(cmp2)
 	//
-	//max := findLocalMaxima(r.Unit.Channels[0].Spectrum, mx/1.25)
-	//var out []float64
-	//for i := range max {
-	//	out = append(out, float64(max[i]))
+	//cmp2 = stretchProcessing(cmp2)
+	//cmp1 = stretchProcessing(cmp1)
+
+	unit.Channels[0].Spectrum = []float64{}
+	for i := range cmp1 {
+		val := cmplx.Abs(cmp1[i])
+		unit.Channels[0].Spectrum = append(unit.Channels[0].Spectrum, val)
+	}
+
+	unit.Channels[1].Spectrum = []float64{}
+	for i := range cmp2 {
+		val := cmplx.Abs(cmp2[i])
+		unit.Channels[1].Spectrum = append(unit.Channels[1].Spectrum, val)
+	}
+
+	mx1 := -1.0
+	for _, f := range unit.Channels[0].Spectrum {
+		if f > mx1 {
+			mx1 = f
+		}
+	}
+
+	mx2 := -1.0
+	for _, f := range unit.Channels[1].Spectrum {
+		if f > mx2 {
+			mx2 = f
+		}
+	}
+
+	pk1 := findLocalMaxima(unit.Channels[0].Spectrum, mx1/2)
+	pk2 := findLocalMaxima(unit.Channels[1].Spectrum, mx2/2)
+
+	unit.Channels[0].Peaks = []float64{}
+	for i := range pk1 {
+		unit.Channels[0].Peaks = append(unit.Channels[0].Peaks, float64(pk1[i]))
+	}
+	unit.Channels[1].Peaks = []float64{}
+	for i := range pk2 {
+		unit.Channels[1].Peaks = append(unit.Channels[1].Peaks, float64(pk2[i]))
+	}
+
+	var freq1 []float64
+	for i := range unit.Channels[0].Spectrum {
+		freq1 = append(freq1, (20833.25*float64(i))/float64(len(cmp1)))
+
+	}
+
+	var freq2 []float64
+	for i := range unit.Channels[1].Spectrum {
+		freq2 = append(freq2, (20833.25*float64(i))/float64(len(cmp2)))
+
+	}
+	unit.Channels[0].Spectrum = downsample(unit.Channels[0].Spectrum, 1024)
+	unit.Channels[1].Spectrum = downsample(unit.Channels[1].Spectrum, 1024)
+	//unit.Channels[0].Spectrum = []float64{}
+	//
+	//unit.Channels[0].Frequencies = freq1
+	//unit.Channels[1].Frequencies = freq2
+
+	unit.Channels[0].SignalI = []float64{}
+	unit.Channels[0].SignalQ = []float64{}
+	h1 = cFFT.Sequence(nil, cmp1)
+	for i := range h1 {
+		unit.Channels[0].SignalI = append(unit.Channels[0].SignalI, real(h1[i]))
+		unit.Channels[0].SignalQ = append(unit.Channels[0].SignalQ, imag(h1[i]))
+	}
+
+	unit.Channels[1].SignalI = []float64{}
+	unit.Channels[1].SignalQ = []float64{}
+	h2 = cFFT.Sequence(nil, cmp2)
+	for i := range h2 {
+		unit.Channels[1].SignalI = append(unit.Channels[1].SignalI, real(h2[i]))
+		unit.Channels[1].SignalQ = append(unit.Channels[1].SignalQ, imag(h2[i]))
+	}
+
+	unit.Metadata.Window = BufferSize * IncomingSize
+	unit.Rate = r.rate
+
+	unit.Channels[0].SignalI = downsample(unit.Channels[0].SignalI, 2048)
+	unit.Channels[0].SignalQ = downsample(unit.Channels[0].SignalQ, 2048)
+	unit.Channels[1].SignalI = downsample(unit.Channels[1].SignalI, 2048)
+	unit.Channels[1].SignalQ = downsample(unit.Channels[1].SignalQ, 2048)
+	//avg := 0.0
+	//cnt := 0.0
+	unit.Distance = []float64{}
+	unit.Phase = []float64{}
+	//last := 0.0
+	//for _, i2 := range pk1 {
+	//	//unit.Channels[0].Spectrum = append(unit.Channels[0].Spectrum, calculateRange(freq1[i2]))
+	//	ra := freq1[i2]
+	//	if last != 0 {
+	//		unit.Distance = append(unit.Distance, calculateRange(ra-last))
+	//		unit.Phase = append(unit.Phase, math.Pi/2)
+	//	} else {
+	//		last = ra
+	//	}
+	//
 	//}
 
-	//var freq []float64
-	//for i, _ := range r.Unit.Channels[0].Spectrum {
-	//	freq = append(freq, (r.Unit.Metadata.Frequency*float64(i))/float64(len(cmp1)))
+	//for _, i2 := range pk2 {
+	//	//unit.Channels[0].Spectrum = append(unit.Channels[0].Spectrum, calculateRange(freq1[i2]))
+	//	ra := calculateRange(freq2[i2])
+	//	unit.Distance = append(unit.Distance, ra)
+	//	unit.Phase = append(unit.Phase, math.Pi/2)
 	//}
-	//
-	//for _, ou := range out {
-	//	r.Unit.Phase = append(r.Unit.Phase, freq[int(ou)])
-	//}
+	//r.dsp[5] = append(r.dsp[5], avg/cnt)
 
-	//r.Unit.Channels[0].Spectrum = r.velocity[0]
-	r.Unit.Channels[0].Peaks = []float64{}
-	r.Unit.Channels[0].Frequencies = []float64{}
-	//
-	//r.Unit.Channels[1].Spectrum = r.velocity[1]
-	r.Unit.Channels[1].Peaks = []float64{}
-	r.Unit.Channels[1].Frequencies = []float64{}
-	//
-	////
-	//r.Unit.Channels[0].SignalI = []float64{}
-	//r.Unit.Channels[0].SignalQ = []float64{}
-	//cmp1i := fft.Sequence(nil, cmp1)
-	//for i := range cmp1i {
-	//	r.Unit.Channels[0].SignalI = append(r.Unit.Channels[0].SignalI, real(cmp1i[i]))
-	//	r.Unit.Channels[0].SignalQ = append(r.Unit.Channels[0].SignalQ, imag(cmp1i[i]))
+	r.mutex.Lock()
+	unit.Phase = r.dsp[4]
+	//var ph []float64
+	//for _, f := range r.dsp[4] {
+	//	value := f / (200.0 / 1000.0 / 1000.0)
+	//	ph = append(ph, value*8192)
 	//}
-	//
-	//r.Unit.Channels[1].SignalI = []float64{}
-	//r.Unit.Channels[1].SignalQ = []float64{}
-	//cmp2i := fft.Sequence(nil, cmp2)
-	//for i := range cmp2i {
-	//	r.Unit.Channels[1].SignalI = append(r.Unit.Channels[1].SignalI, real(cmp2i[i]))
-	//	r.Unit.Channels[1].SignalQ = append(r.Unit.Channels[1].SignalQ, imag(cmp2i[i]))
-	//}
-	//
-	//r.Unit.Metadata.Window = len(cmp1)
+	le := 128
+	if len(r.dsp[5]) >= le {
+		r.dsp[5] = r.dsp[5][len(r.dsp[5])-le:]
+	}
 
 	//r.buffer[0] = []complex128{}
 	//r.buffer[1] = []complex128{}
+	r.mutex.Unlock()
+
+	r.display.Lock()
+	r.Unit = unit
+	r.display.Unlock()
 
 }
 
 func (r *RemoteUnit) tick() {
-	r.mutex.RLock()
-	defer r.mutex.RUnlock()
+	r.display.RLock()
+	unit := r.Unit
+	r.display.RUnlock()
 
-	marshal, err := json.Marshal(r.Unit)
+	marshal, err := json.Marshal(unit)
 	if err != nil {
 		log.Err(err)
 		return
@@ -328,11 +369,11 @@ func (r *RemoteUnit) tick() {
 
 func (r *RemoteUnit) process(data []byte) {
 	//fmt.Println(string(data))
+
 	packet := Packet{}
 	err := json.Unmarshal(data, &packet)
 	if err != nil {
 		log.Err(err)
-		fmt.Println(string(data))
 		return
 	}
 
@@ -341,19 +382,18 @@ func (r *RemoteUnit) process(data []byte) {
 	for _, result := range packet.Results {
 		incoming = append(incoming, hexStringToIntArray(result))
 	}
-
 	r.total += len(incoming[0])
-	if time.Since(r.start) > time.Second {
-		r.rate = float64(r.total) / time.Since(r.start).Seconds()
-		log.Event("Rate: %.4f", r.rate)
-		r.start = time.Now()
+	//if time.Since(r.start) > time.Microsecond*FrameRender {
+	//
+	//	//r.start = time.Now()
+	//
+	//}
+	if r.total > 0 {
+		r.rate = float64(r.total) / (float64(packet.Time-r.start) / (1000.0 * 1000.0))
+		//fmt.Println(float64(packet.Time-r.start) / (1000.0 * 1000.0))
 		r.total = 0
+		r.start = packet.Time
 	}
-
-	r.dsp[0] = incoming[0]
-	r.dsp[1] = incoming[1]
-	r.dsp[2] = incoming[2]
-	r.dsp[3] = incoming[3]
 
 	var cmp1 []complex128
 	var cmp2 []complex128
@@ -362,16 +402,32 @@ func (r *RemoteUnit) process(data []byte) {
 		cmp2 = append(cmp2, complex(incoming[3][i], incoming[2][i]))
 	}
 
+	for _, f := range incoming[4] {
+		if minHz > f {
+			minHz = f
+		}
+		if maxHz < f {
+			maxHz = f
+		}
+	}
 	r.mutex.Lock()
-	defer r.mutex.Unlock()
-
-	r.buffer[0] = append(cmp1, r.buffer[0]...)
-	r.buffer[1] = append(cmp2, r.buffer[1]...)
+	// 9600 s/s 768.04915515 -> 12.4992
+	r.buffer[0] = append(r.buffer[0], cmp1...)
+	r.buffer[1] = append(r.buffer[1], cmp2...)
 
 	if len(r.buffer[0]) >= IncomingSize*BufferSize {
-		r.buffer[0] = r.buffer[0][0 : IncomingSize*BufferSize]
-		r.buffer[1] = r.buffer[1][0 : IncomingSize*BufferSize]
+		r.buffer[0] = r.buffer[0][len(r.buffer[0])-(IncomingSize*BufferSize):]
 	}
+	if len(r.buffer[1]) >= IncomingSize*BufferSize {
+		r.buffer[1] = r.buffer[1][len(r.buffer[1])-(IncomingSize*BufferSize):]
+	}
+	//r.dsp[0] = append(r.dsp[0], incoming[0]...)
+	//r.dsp[1] = append(r.dsp[1], incoming[1]...)
+	//r.dsp[2] = append(r.dsp[2], incoming[2]...)
+	//r.dsp[3] = append(r.dsp[3], incoming[3]...)
+	r.dsp[4] = incoming[4]
+
+	r.mutex.Unlock()
 
 }
 
@@ -379,52 +435,51 @@ func (r *RemoteUnit) connect() error {
 	r.total = 0
 	// Initialize local variables
 	var err error
-	addr, err := net.ResolveTCPAddr("tcp", "10.0.1.133:5545")
+	var conn *websocket.Conn
+	// Connect to the address
+	conn, _, err = websocket.DefaultDialer.Dial(r.address, nil)
 	if err != nil {
-		fmt.Println(err)
 		return err
 	}
+	// Set the close handler to send a bool to the done channel
+	conn.SetCloseHandler(func(code int, text string) error {
+		r.done <- true
 
-	tcp, err := net.DialTCP("tcp", nil, addr)
-	if err != nil {
-		fmt.Println(err)
-		return err
-	}
-
+		return nil
+	})
 	// Send an initial ping message to being receiving
-	_, err = tcp.Write([]byte("Hello"))
+	err = conn.WriteMessage(websocket.TextMessage, []byte("Ping!"))
 	if err != nil {
-		fmt.Println(err)
 		return err
 	}
-	reply := make([]byte, 2048)
-
-	n, err := tcp.Read(reply)
+	// Read the metadata response
+	_, data, err := conn.ReadMessage()
 	if err != nil {
-		println("Write to server failed:", err.Error())
-		os.Exit(1)
+		return err
 	}
 	// Parse the metadata
 	unit := UnitData{}
-	err = json.Unmarshal(reply[0:n], &unit)
+	err = json.Unmarshal(data, &unit)
 	if err != nil {
 		return err
 	}
 	// Metadata converting
+	r.display.Lock()
 	r.Unit.Metadata = Metadata{
 		Base:      unit.Base,
 		Samples:   unit.Adc.Samples,
 		Frequency: unit.Adc.Frequency,
 		Window:    unit.Adc.Window,
+		Prf:       unit.Adc.Prf,
 		Mac:       unit.Mac,
 		Name:      unit.Name,
 		XFov:      unit.XFov,
 		YFov:      unit.YFov,
 		Chirp:     unit.Adc.Pulse,
 	}
-
-	fmt.Println(unit)
-	r.connection = tcp
+	r.Unit.Metadata.Connected = true
+	r.display.Unlock()
+	r.connection = conn
 
 	log.Event("Unit '%s' @ %s connected", unit.Name, r.address)
 
@@ -474,23 +529,40 @@ func scanNullTerminatedJSON(data []byte, atEOF bool) (advance int, token []byte,
 	return i + 1, data[:i], nil
 }
 func (r *RemoteUnit) listen() {
-
-	scanner := bufio.NewScanner(r.connection)
-	scanner.Split(scanNullTerminatedJSON)
-
-	for scanner.Scan() {
-		r.process(scanner.Bytes())
+	for {
+		if r.connection == nil {
+			return
+		}
+		err := r.connection.SetReadDeadline(time.Now().Add(time.Millisecond * 500))
+		if err != nil {
+			return
+		}
+		_, data, err := r.connection.ReadMessage()
+		if err != nil {
+			r.connection.Close()
+			return
+		}
+		r.process(data)
 	}
-	if scanner.Err() != nil {
-		fmt.Println("Scanner error:", scanner.Err())
-	}
+	//scanner := bufio.NewScanner(r.connection)
+	//scanner.Split(scanNullTerminatedJSON)
+	//
+	//for scanner.Scan() {
+	//	r.process(scanner.Bytes())
+	//}
+	//if scanner.Err() != nil {
+	//	fmt.Println("Scanner error:", scanner.Err())
+	//}
 }
 
 func (r *RemoteUnit) watchdog() {
 	for {
 		select {
 		case <-r.done:
+			r.display.Lock()
 			log.Event("Unit '%s' @ %s disconnected. Reconnecting...", r.Unit.Metadata.Name, r.address)
+			r.Unit.Metadata.Connected = false
+			r.display.Unlock()
 			r.reconnect()
 		}
 	}
@@ -502,16 +574,20 @@ func (r *RemoteUnit) reconnect() {
 	}
 	err := r.connect()
 	if err != nil {
+		r.display.RLock()
 		log.Log("Unit '%s' @ %s connection failed", r.Unit.Metadata.Name, r.address)
+		r.display.RUnlock()
 		return
 	}
 }
 
 func NewRemoteUnit(addr string, out chan []byte) (*RemoteUnit, error) {
 	r := RemoteUnit{
-		mutex: sync.RWMutex{},
+		mutex:   sync.RWMutex{},
+		display: sync.RWMutex{},
 		Unit: Unit{
-
+			Phase:    []float64{},
+			Distance: []float64{},
 			Channels: []Channel{{
 				SignalI:     []float64{},
 				SignalQ:     []float64{},
@@ -558,7 +634,7 @@ func NewRemoteUnit(addr string, out chan []byte) (*RemoteUnit, error) {
 
 	go r.watchdog()
 	go r.listen()
-	r.start = time.Now()
+
 	return &r, nil
 }
 

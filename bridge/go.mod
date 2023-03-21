@@ -22,6 +22,7 @@ require (
 	github.com/mattetti/audio v0.0.0-20190404201502-c6aebeb78429 // indirect
 	github.com/mattn/go-sqlite3 v1.14.16 // indirect
 	github.com/mjibson/go-dsp v0.0.0-20180508042940-11479a337f12 // indirect
+	github.com/r9y9/gossp v0.0.1 // indirect
 	github.com/redis/go-redis/v9 v9.0.2 // indirect
 	golang.org/x/exp v0.0.0-20230307190834-24139beb5833 // indirect
 	golang.org/x/image v0.6.0 // indirect
