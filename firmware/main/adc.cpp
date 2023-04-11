@@ -10,6 +10,7 @@
 #include <cmath>
 #include <driver/gptimer.h>
 #include <driver/gpio.h>
+#include <esp_adc/adc_oneshot.h>
 #include "adc.h"
 
 static TaskHandle_t s_task_handle;
@@ -48,7 +49,7 @@ void Adc::adcTask(void *arg) {
     auto adc = (Adc *) arg;
 
     uint64_t ready = xRingbufferGetCurFreeSize(adc->rb);
-    if (ready < 5 * 4 * 4) {
+    if (ready < 4 * 4 * 4) {
         return;
     }
 
@@ -56,9 +57,9 @@ void Adc::adcTask(void *arg) {
         return;
     }
     // DO stuff
-    int *mk[5] = {};
+    int *mk[4] = {};
     bool all = true;
-    for (int j = 0; j < adc->conf.channels.count + 1; ++j) {
+    for (int j = 0; j < adc->conf.channels.count; ++j) {
         int *front = adc->buffers[j]->front();
         if (front == nullptr) {
             all = false;
@@ -68,7 +69,7 @@ void Adc::adcTask(void *arg) {
     }
     if (all) {
         if (xRingbufferSend(adc->rb, &mk, sizeof(mk), 0) == pdTRUE) {
-            for (int j = 0; j < adc->conf.channels.count + 1; ++j) {
+            for (int j = 0; j < adc->conf.channels.count; ++j) {
                 adc->buffers[j]->pop();
             }
         }
@@ -109,7 +110,7 @@ Adc::Adc(AdcConfig conf, RingbufHandle_t rb) : conf(conf) {
     this->rb = rb;
 
     // Set the sample bytes to the number of samples per measurement * bytes per measurement * number of channels
-    numSamples = conf.sampling.subSamples * SOC_ADC_DIGI_DATA_BYTES_PER_CONV * conf.channels.count;
+    numSamples = (conf.sampling.subSamples) * SOC_ADC_DIGI_DATA_BYTES_PER_CONV * conf.channels.count;
 
     // Define the buffer size as being large enough to contain a sample set from all channels
     bufferSize = numSamples * 4;
@@ -125,7 +126,7 @@ Adc::Adc(AdcConfig conf, RingbufHandle_t rb) : conf(conf) {
             .name = "adcTimer",
     };
     esp_timer_create(&chirpArgs, &chirpTimer);
-    esp_timer_start_periodic((esp_timer_handle_t) chirpTimer, 4 * 1000);
+    esp_timer_start_periodic((esp_timer_handle_t) chirpTimer, 2 * 1000);
 
 
 //    pcnt_unit_config_t unit_config = {
@@ -188,50 +189,57 @@ Adc::Adc(AdcConfig conf, RingbufHandle_t rb) : conf(conf) {
   *    - ESP_OK: succeed
   */
 void Adc::setup(adc_continuous_handle_t *out_handle) {
-    // Initialize a local handle
-    adc_continuous_handle_t localHandle = nullptr;
-    // Define configuration for buffer size and samples per frame
-    adc_continuous_handle_cfg_t adc_config = {
-            .max_store_buf_size = static_cast<uint32_t>(bufferSize),
-            .conv_frame_size = static_cast<uint32_t>(numSamples),
-    };
+    while (1) {
+        // Initialize a local handle
+        adc_continuous_handle_t localHandle;
+        // Define configuration for buffer size and samples per frame
+        adc_continuous_handle_cfg_t adc_config = {
+                .max_store_buf_size = static_cast<uint32_t>(bufferSize),
+                .conv_frame_size = static_cast<uint32_t>(numSamples),
+        };
 
-    // Initialize handle
-    esp_err_t err;
-    err = adc_continuous_new_handle(&adc_config, &localHandle);
-    if (err != ESP_OK) {
-        printf("Add handle failed: %s\n", esp_err_to_name(err));
+        // Initialize handle
+
+        esp_err_t err;
+        err = adc_continuous_new_handle(&adc_config, &localHandle);
+        if (err != ESP_OK) {
+            printf("ADC handle failed: %s... (HEAP: %ld, %lu, %lu) Trying again in 100ms\n", esp_err_to_name(err),
+                   esp_get_minimum_free_heap_size(), static_cast<uint32_t>(bufferSize),
+                   static_cast<uint32_t>(numSamples));
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+        // Define parameters
+
+
+        adc_continuous_config_t dig_cfg = {
+                .sample_freq_hz = static_cast<uint32_t>(conf.sampling.rate),
+                .conv_mode = ADC_CONV_SINGLE_UNIT_1,
+                .format = ADC_OUTPUT_TYPE,
+        };
+        // Define pattern
+        adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {};
+        dig_cfg.pattern_num = conf.channels.count;
+        for (int i = 0; i < conf.channels.count; i++) {
+            adc_pattern[i].atten = conf.sampling.attenuation;
+            adc_pattern[i].channel = conf.channels.ports[i] & 0x7;
+            adc_pattern[i].unit = ADC_UNIT;
+            adc_pattern[i].bit_width = ADC_BIT_WIDTH;
+        }
+        dig_cfg.adc_pattern = adc_pattern;
+        // Emplace patterns
+        err = adc_continuous_config(localHandle, &dig_cfg);
+        if (err != ESP_OK) {
+            printf("ADC Register failed!\n");
+            return;
+        }
+        // Set the local handle to the main filter
+        *out_handle = localHandle;
+        int channels = conf.channels.count;
+        int samplesSec = (conf.sampling.rate / channels) / conf.sampling.subSamples;
+        printf("ADC Configured: %d samples/sec * %d channels\n", samplesSec, channels);
         return;
     }
-    // Define parameters
-
-
-    adc_continuous_config_t dig_cfg = {
-            .sample_freq_hz = static_cast<uint32_t>(conf.sampling.rate),
-            .conv_mode = ADC_CONV_SINGLE_UNIT_1,
-            .format = ADC_OUTPUT_TYPE,
-    };
-    // Define pattern
-    adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {};
-    dig_cfg.pattern_num = conf.channels.count;
-    for (int i = 0; i < conf.channels.count; i++) {
-        adc_pattern[i].atten = conf.sampling.attenuation;
-        adc_pattern[i].channel = conf.channels.ports[i] & 0x7;
-        adc_pattern[i].unit = ADC_UNIT;
-        adc_pattern[i].bit_width = ADC_BIT_WIDTH;
-    }
-    dig_cfg.adc_pattern = adc_pattern;
-    // Emplace patterns
-    err = adc_continuous_config(localHandle, &dig_cfg);
-    if (err != ESP_OK) {
-        printf("ADC Register failed!\n");
-        return;
-    }
-    // Set the local handle to the main filter
-    *out_handle = localHandle;
-    int channels = conf.channels.count;
-    int samplesSec = (conf.sampling.rate / channels) / conf.sampling.subSamples;
-    printf("ADC Configured: %d samples/sec * %d channels\n", samplesSec, channels);
 }
 
 static bool IRAM_ATTR
@@ -258,7 +266,32 @@ int makeSigned(unsigned x) {
     abort();
     return 0;
 }
+/*---------------------------------------------------------------
+        ADC Calibration
+---------------------------------------------------------------*/
+static bool example_adc_calibration_init(adc_unit_t unit, adc_atten_t atten, adc_cali_handle_t *out_handle)
+{
+    adc_cali_handle_t handle = NULL;
+    esp_err_t ret = ESP_FAIL;
+    bool calibrated = false;
 
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    if (!calibrated) {
+        adc_cali_curve_fitting_config_t cali_config = {
+                .unit_id = unit,
+                .atten = atten,
+                .bitwidth = ADC_BITWIDTH_12,
+        };
+        ret = adc_cali_create_scheme_curve_fitting(&cali_config, &handle);
+        if (ret == ESP_OK) {
+            calibrated = true;
+        }
+    }
+#endif
+
+    *out_handle = handle;
+    return calibrated;
+}
 void Adc::begin(void *params) {
     auto adc = (Adc *) params;
 
@@ -266,9 +299,66 @@ void Adc::begin(void *params) {
     adc->buffers[1] = new Buffer();
     adc->buffers[2] = new Buffer();
     adc->buffers[3] = new Buffer();
-    adc->buffers[4] = new Buffer();
+//    adc->buffers[4] = new Buffer();
 
-    esp_err_t err;
+
+    adc_oneshot_unit_handle_t adc1_handle;
+    adc_oneshot_unit_init_cfg_t init_config1 = {
+            .unit_id = ADC_UNIT_1,
+    };
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle));
+
+    //-------------ADC1 Config---------------//
+    adc_oneshot_chan_cfg_t config = {
+            .atten = ADC_ATTEN_DB_6,
+            .bitwidth = ADC_BITWIDTH_12,
+    };
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_3, &config));
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_4, &config));
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_5, &config));
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_6, &config));
+    adc_cali_handle_t s;
+    example_adc_calibration_init(ADC_UNIT_1, ADC_ATTEN_DB_6, &s);
+
+    while (1) {
+        int buf = 0;
+        if (xSemaphoreTake(adcMutex, 1) != pdTRUE) {
+            continue;
+        }
+        esp_err_t err;
+        err = adc_oneshot_read(adc1_handle, ADC_CHANNEL_3, &buf);
+        if (err != ESP_OK) {
+            printf("%s\n", esp_err_to_name(err));
+        }
+        adc_cali_raw_to_voltage(s, buf, &buf);
+        adc->buffers[0]->push(buf);
+        err = adc_oneshot_read(adc1_handle, ADC_CHANNEL_4, &buf);
+        if (err != ESP_OK) {
+            printf("%s\n", esp_err_to_name(err));
+        }
+        adc_cali_raw_to_voltage(s, buf, &buf);
+        adc->buffers[1]->push(buf);
+        err = adc_oneshot_read(adc1_handle, ADC_CHANNEL_5, &buf);
+        if (err != ESP_OK) {
+            printf("%s\n", esp_err_to_name(err));
+        }
+        adc_cali_raw_to_voltage(s, buf, &buf);
+        adc->buffers[2]->push(buf);
+        if (err != ESP_OK) {
+            printf("%s\n", esp_err_to_name(err));
+        }
+        err = adc_oneshot_read(adc1_handle, ADC_CHANNEL_6, &buf);
+        if (err != ESP_OK) {
+            printf("%s\n", esp_err_to_name(err));
+        }
+        adc_cali_raw_to_voltage(s, buf, &buf);
+        adc->buffers[3]->push(buf);
+        xSemaphoreGive(adcMutex);
+        vTaskDelay(pdMS_TO_TICKS(0.25));
+    }
+    return;
+
+//    esp_err_t err;
     //zero-initialize the config structure.
     gpio_config_t io_conf = {};
     //disable interrupt
@@ -289,7 +379,7 @@ void Adc::begin(void *params) {
 
     uint32_t read = 0;
     uint8_t result[512] = {0};
-    memset(result, 0xcc, 128);
+    memset(result, 0xcc, 512);
 
     s_task_handle = xTaskGetCurrentTaskHandle();
 
@@ -300,7 +390,7 @@ void Adc::begin(void *params) {
             .on_conv_done = s_conv_done_cb,
     };
 
-
+    esp_err_t err;
     err = adc_continuous_register_event_callbacks(adc->handle, &cbs, nullptr);
     if (err != ESP_OK) {
         printf("ADC Register failed!\n");
@@ -340,6 +430,7 @@ void Adc::begin(void *params) {
             }
 
             if (xSemaphoreTake(adcMutex, portMAX_DELAY) == pdTRUE) {
+//                adc->buffers[4]->push(gpio_get_level(GPIO_NUM_10)*128);
                 for (int i = 0; i < read; i += SOC_ADC_DIGI_RESULT_BYTES) {
                     auto *out = (adc_digi_output_data_t *) &result[i];
                     uint32_t channel = out->type2.channel;
@@ -350,17 +441,16 @@ void Adc::begin(void *params) {
                     if (j < 0 || j >= 4) {
                         continue;
                     }
-                int v = 0;
-                adc_cali_raw_to_voltage(calHandle, makeSigned(value), &v);
+                    int v = 0;
+                    adc_cali_raw_to_voltage(calHandle, makeSigned(value), &v);
 //                sampleBuffer[j] += makeSigned(value);
 //                sampleCount[j] += 1;
                     adc->buffers[j]->push(v);
                     // Push the current timing rate for reference
-                    if (j == 0) {
-                        adc->buffers[4]->push(gpio_get_level(GPIO_NUM_10)*128);
-                    }
+
 //                    ejections++;
                 }
+
 
 
 //                cycles++;

@@ -7,6 +7,7 @@
 #include <sstream>
 #include <esp_mac.h>
 #include <lwip/sockets.h>
+#include <iomanip>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/ringbuf.h"
@@ -181,56 +182,90 @@ static esp_err_t socket_get_handler(httpd_req_t *req) {
 const char hexTable[] = "0123456789ABCDEF";
 
 void intArrayToHexString(const int *arr, int arrSize, char *outStr) {
-    // Allocate space for the hex string
-    const int chars = 3;
-    int hexStrSize = BUFFER_SIZE * chars + 1;
-    char hexStr[BUFFER_SIZE * chars + 1] = {};
-    hexStr[hexStrSize - 1] = '\0'; // Null terminate the string
-    // Convert each int in the array to hex and concatenate it onto the hex string
-    int i;
-    for (i = 0; i < arrSize; i++) {
-        hexStr[i * chars] = hexTable[(arr[i] >> 8) & 0xF];
-        hexStr[i * chars + 1] = hexTable[(arr[i] >> 4) & 0xF];
-        hexStr[i * chars + 2] = hexTable[arr[i] & 0xF];
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
+    for (int i = 0; i < arrSize; i++) {
+        oss << std::setw(4) << arr[i];
     }
-
-    // Copy the hex string to the output string
-    strcpy(outStr, hexStr);
+    std::string hexStr = oss.str();
+    strcpy(outStr, hexStr.c_str());
 }
 
-bool generatePacket(char *dst, int buffer, int **data, int m, int n) {
-    auto obj = cJSON_CreateObject();
-    // Create an array to hold the individual buffers
-    auto results = cJSON_CreateArray();
-    // Allocate memory on the stack to contain the converted hex strings
-    char hex_str[BUFFER_SIZE * 3 + 1];
-    // For each channel, add a string of hex to the results array
-    for (int i = 0; i < m; i++) {
-        // Convert the pointer array into a hex buffer for transport
-        if (data[i] == nullptr) {
-            continue;
-        }
-        intArrayToHexString(data[i], BUFFER_SIZE, hex_str);
-        // Add the string to the results array
-        cJSON_AddItemToArray(results, cJSON_CreateString(hex_str));
-    }
-    // Add the results array to the JSON object
-    cJSON_AddItemToObject(obj, "results", results);
-    // Add the current time since system boot to the JSON object
-    cJSON_AddItemToObject(obj, "time", cJSON_CreateNumber((double) esp_timer_get_time()));
-    // Print the JSON array out into the stack array
-    auto val = cJSON_PrintPreallocated(obj, dst, buffer, false);
-    // Free all memory used to create the JSON object
-    cJSON_Delete(obj);
-    // If the JSON export operation fails, cleanup and quietly move on
-    if (val == 0) {
-        // Print out a warning for context
-        printf("A null string has been created...\n");
-        // Proceed back to the beginning of the innermost while loop
-        return false;
-    }
-    return true;
+void intToUint8Array(int input, uint8_t *output) {
+    output[0] = (input >> 24) & 0xFF;
+    output[1] = (input >> 16) & 0xFF;
+    output[2] = (input >> 8) & 0xFF;
+    output[3] = input & 0xFF;
 }
+
+void
+encode_int_array_to_binary(const int *int_array, size_t int_array_len, uint8_t *binary_data, size_t binary_data_len) {
+    size_t i, j;
+
+    // Ensure that the binary data buffer is large enough to store the encoded data
+    if (binary_data_len < (int_array_len * sizeof(int))) {
+        printf("Error: Binary data buffer is not large enough\n");
+        return;
+    }
+
+    // Iterate through each integer in the array and pack it into binary format
+    for (i = 0, j = 0; i < int_array_len; i++, j += sizeof(int)) {
+        // Convert the integer to network byte order (big-endian)
+        int net_order = htonl(int_array[i]);
+
+        // Copy the bytes of the integer into the binary data buffer
+        memcpy(&binary_data[j], &net_order, sizeof(int));
+    }
+}
+//
+//bool generatePacket(char *dst, int buffer, int **data, int m, int n) {
+//    auto obj = cJSON_CreateObject();
+//    // Create an array to hold the individual buffers
+//    auto results = cJSON_CreateArray();
+////    // Allocate memory on the stack to contain the converted hex strings
+////    char hex_str[BUFFER_SIZE * 3 + 1];
+//
+//
+//    // Determine the total length of the binary data
+//    size_t total_len = BUFFER_SIZE * 4 * 8;
+//    // Allocate memory for the binary data buffer
+//    auto *binary_data = (uint8_t *) malloc(total_len);
+//// Loop through each integer array in the pointer array and encode it into binary format
+//    for (int i = 0; i < m; i++) {
+//        // Convert the pointer array into a hex buffer for transport
+//        if (data[i] == nullptr) {
+//            return false;
+//        }
+//
+//        // Calculate the start position in the binary data buffer for this integer array
+//        size_t start_pos = i * BUFFER_SIZE * sizeof(int);
+//
+//        // Encode the integer array into binary format and append it to the binary data buffer
+//        encode_int_array_to_binary(data[i], BUFFER_SIZE, binary_data + start_pos, total_len - start_pos);
+//    }
+//
+//
+////        intArrayToHexString(data[i], BUFFER_SIZE, hex_str);
+//    // Add the string to the results array
+//
+//    cJSON_AddItemToArray(results, cJSON_CreateIntArray(data[i], BUFFER_SIZE));
+//    // Add the results array to the JSON object
+//    cJSON_AddItemToObject(obj, "results", results);
+//    // Add the current time since system boot to the JSON object
+//    cJSON_AddItemToObject(obj, "time", cJSON_CreateNumber((double) esp_timer_get_time()));
+//    // Print the JSON array out into the stack array
+//    auto val = cJSON_PrintPreallocated(obj, dst, buffer, false);
+//    // Free all memory used to create the JSON object
+//    cJSON_Delete(obj);
+//    // If the JSON export operation fails, cleanup and quietly move on
+//    if (val == 0) {
+//        // Print out a warning for context
+//        printf("A null string has been created...\n");
+//        // Proceed back to the beginning of the innermost while loop
+//        return false;
+//    }
+//    return true;
+//}
 
 
 static void callback(int *arr[5]) {
@@ -262,17 +297,35 @@ static void callback(int *arr[5]) {
 //        printf("A null string has been created...\n");
 //        return;
 //    }
-    const int len = 5 * (BUFFER_SIZE * 8) + 512; // Size of buffers in json
-    char out[len];
-    if (!generatePacket(out, len, arr, 5, BUFFER_SIZE)) {
-        printf("Packet generation failed.\n");
+//    const int len = 5 * (BUFFER_SIZE * 4) + 512; // Size of buffers in json
+//    char out[len];
+//    if (!generatePacket(out, len, arr, 5, BUFFER_SIZE)) {
+//        printf("Packet generation failed.\n");
+//    }
+
+    size_t total_len = BUFFER_SIZE * 4 * sizeof(int);
+    // Allocate memory for the binary data buffer
+    auto *binary_data = (uint8_t *) malloc(total_len);
+
+    for (int i = 0; i < 4; i++) {
+        // Convert the pointer array into a hex buffer for transport
+        if (arr[i] == nullptr) {
+            free(binary_data);
+            return;
+        }
+
+        for (int j = 0; j < BUFFER_SIZE; ++j) {
+            intToUint8Array(arr[i][j], &binary_data[i * BUFFER_SIZE * sizeof(int) + j * sizeof(int)]);
+        }
     }
-    out_packer.payload = (uint8_t *) out;
-    out_packer.len = strlen(out);
-    out_packer.type = HTTPD_WS_TYPE_TEXT;
+
+    out_packer.payload = (uint8_t *) binary_data;
+    out_packer.len = total_len;
+    out_packer.type = HTTPD_WS_TYPE_BINARY;
 
 
     auto ret = httpd_ws_send_frame_async(hd, fd, &out_packer);
+    free(binary_data);
     if (ret != ESP_OK) {
         printf("Send to bridge failed!\n");
         fd = -1;
@@ -326,7 +379,7 @@ void watcher(void *arg) {
 
         callback(data);
 
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < 4; ++i) {
             free(data[i]);
         }
 
@@ -425,9 +478,9 @@ void runServer(void *params) {
                 // Create a new JSON object to contain the outgoing buffers
                 const int len = 4 * (BUFFER_SIZE * 2) + 512; // Size of buffers in json
                 char out[len];
-                if (!generatePacket(out, len, data, 4, BUFFER_SIZE)) {
-                    printf("Packet generation failed.\n");
-                }
+//                if (!generatePacket(out, len, data, 4, BUFFER_SIZE)) {
+//                    printf("Packet generation failed.\n");
+//                }
                 // Free all the channel buffers
                 for (int i = 0; i < 4; ++i) {
                     if (data[i] != nullptr) free(data[i]);
@@ -503,12 +556,15 @@ Server::Server() {
 
     //Create ring buffer
 
-    buf_handle = xRingbufferCreate((sizeof(int *) * 5) * 16, RINGBUF_TYPE_NOSPLIT);
+    buf_handle = xRingbufferCreate((sizeof(int *) * 4) * 64, RINGBUF_TYPE_NOSPLIT);
     if (buf_handle == nullptr) {
         printf("Failed to create ring buffer\n");
     }
 
     adc = new Adc(conf, buf_handle);
+
+
+
     new Controller(adc, s->sampling.prf, s->sampling.pulse);
     xTaskCreatePinnedToCore(watcher, "adcWatch", 4096 * 4, nullptr, tskIDLE_PRIORITY + 4, nullptr, 0);
 

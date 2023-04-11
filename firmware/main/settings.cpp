@@ -17,8 +17,8 @@ Settings::Settings() {
 
 void Settings::pull() {
     auto p = Persistent::instance();
-    p.readInt("frequency", &this->sampling.frequency, 40000);
-    p.readInt("samples", &this->sampling.samples, 2);
+    p.readInt("frequency", &this->sampling.frequency, 80000);
+    p.readInt("samples", &this->sampling.samples, 1);
     p.readInt("prf", &this->sampling.prf, 1000);
     p.readInt("pulse", &this->sampling.pulse, 100);
 }

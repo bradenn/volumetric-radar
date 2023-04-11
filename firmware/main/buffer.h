@@ -10,7 +10,7 @@
 #include <freertos/semphr.h>
 
 #define BUFFER_SIZE 256
-#define BUFFER_COUNT 4
+#define BUFFER_COUNT 16
 
 using std::deque;
 

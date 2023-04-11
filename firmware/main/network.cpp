@@ -19,7 +19,7 @@
 #define AP_HTML_SETUP_START "_binary_style_css_start"
 #define AP_HTML_SETUP_END "_binary_style_css_end"
 static EventGroupHandle_t s_wifi_event_group;
-#define NETWORK_WIFI_RECONNECTS 5
+#define NETWORK_WIFI_RECONNECTS 10
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
 
@@ -478,10 +478,16 @@ static int reconnectAttempts = 0;
 static void wifi_event_handler(void *arg, esp_event_base_t eventBase, int32_t eventId, void *event_data) {
     if (eventBase == WIFI_EVENT) {
         switch (eventId) {
-            case WIFI_EVENT_STA_START:
-                esp_wifi_connect();
-                printf("Wi-Fi Station mode activated...\n");
+            case WIFI_EVENT_STA_START: {
+                esp_err_t err = esp_wifi_connect();
+                if (err != ESP_OK) {
+                    printf("Wi-Fi Connect failed! %s\n", esp_err_to_name(err));
+                } else {
+                    printf("Wi-Fi Station mode activated...\n");
+
+                }
                 break;
+            }
             case WIFI_EVENT_STA_CONNECTED:
                 printf("Connected to network!\n");
             case WIFI_EVENT_STA_DISCONNECTED:
@@ -655,7 +661,6 @@ esp_err_t Network::startSTA(Credentials credentials) {
     if (err != ESP_OK) {
         return err;
     }
-    esp_wifi_set_ps(WIFI_PS_NONE);
     // Open the access point if needed
     err = esp_wifi_start();
     if (err != ESP_OK) {
