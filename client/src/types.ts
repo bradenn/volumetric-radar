@@ -24,6 +24,8 @@ export interface Zone {
 }
 
 export interface Unit {
+    pan: number,
+    tilt: number,
     channels: Channel[]
     metadata: {
         name: string // 80000Hz

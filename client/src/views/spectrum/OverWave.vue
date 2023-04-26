@@ -3,30 +3,39 @@
 
 import {onMounted, onUnmounted, reactive} from "vue";
 import {v4 as uuidv4} from "uuid";
+import Tag from "@/components/Tag.vue";
+import Divider from "@/components/Divider.vue";
 
 interface Datatype {
-  name: string
-  values0: number[]
-  values1: number[]
-  samples: number
-  resample: boolean
+    name: string
+    values0: number[]
+    values1: number[]
+    samples: number
+    resample: boolean
 }
 
 let props = defineProps<Datatype>();
 
 let maxBuff = props.samples
 
+interface Range {
+    min: string,
+    max: string,
+    key: number
+}
+
 const state = reactive({
-  lastFew: [] as number[][],
-  canvas: {} as HTMLCanvasElement,
-  ctx: {} as CanvasRenderingContext2D,
-  min: new Map<number, number>(),
-  max: new Map<number, number>(),
-  maxIndex: 0,
-  buffers: [[], [], [], []] as number[][],
-  top: [] as number[],
-  fade: [] as number[],
-  avgOffset: 2,
+    ranges: [{min: '0', max: '0', key: 0}, {min: '0', max: '0', key: 1}] as Range[],
+    lastFew: [] as number[][],
+    canvas: {} as HTMLCanvasElement,
+    ctx: {} as CanvasRenderingContext2D,
+    min: new Map<number, number>(),
+    max: new Map<number, number>(),
+    maxIndex: 0,
+    buffers: [[], [], [], []] as number[][],
+    top: [] as number[],
+    fade: [] as number[],
+    avgOffset: 2,
   uuid: uuidv4(),
   currentTime: 0,
   chirpPosition: 0,
@@ -161,24 +170,24 @@ function draw() {
   // ctx.stroke()
   // ctx.closePath()
   //
-  // let scale = 25;
-  //
-  // for (let i = 0; i < w / scale; i++) {
-  //   ctx.beginPath()
-  //   ctx.moveTo(i * scale, h / 1.25 - 2)
-  //   ctx.lineTo(i * scale, h / 1.25 + 2)
-  //   ctx.stroke()
-  //   ctx.closePath()
-  // }
+    // let scale = 25;
+    //
+    // for (let i = 0; i < w / scale; i++) {
+    //   ctx.beginPath()
+    //   ctx.moveTo(i * scale, h / 1.25 - 2)
+    //   ctx.lineTo(i * scale, h / 1.25 + 2)
+    //   ctx.stroke()
+    //   ctx.closePath()
+    // }
 
-  state.buffers[0] = props.values0
-  state.buffers[1] = props.values1
+    state.buffers[0] = props.values0.reverse()
+    state.buffers[1] = props.values1.reverse()
 
-  ctx.fillStyle = "rgba(0,0,0,0.8)"
-  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+    ctx.fillStyle = "rgba(0,0,0,0.8)"
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
 
-  drawPattern(ctx, 0, 'rgba(255,128,10,1)', h / 2 - h / 4)
-  drawPattern(ctx, 1, 'rgba(255,128,10,1)', h / 2 + h / 4)
+    drawPattern(ctx, 0, 'rgba(255,128,10,1)', h / 2)
+    drawPattern(ctx, 1, 'rgba(255,128,10,1)', h)
 
 
 }
@@ -210,49 +219,65 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number, color: strin
   let minY = 0
   let maxY = 1270
 
-  if (!runningMin.get(values)) {
-    runningMin.set(values, [])
-  }
+    if (!runningMin.get(values)) {
+        runningMin.set(values, [])
+    }
 
-  if (!runningMax.get(values)) {
-    runningMax.set(values, [])
-  }
+    if (!runningMax.get(values)) {
+        runningMax.set(values, [])
+    }
 
-  let adj = props.resample ? summarizeSignal(state.buffers[values], ctx.canvas.width) : state.buffers[values]
-  minY = Math.min(...adj);
-  state.min.set(values, Math.round(minY * 100) / 100)
-  maxY = Math.max(...adj);
-  state.max.set(values, Math.round(maxY * 100) / 100)
-  runningMin.get(values)?.unshift(minY)
-  runningMax.get(values)?.unshift(maxY)
-  let runs = 100
-  minY = (runningMin.get(values)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
-  maxY = (runningMax.get(values)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
+    let adj = props.resample ? summarizeSignal(state.buffers[values], ctx.canvas.width) : state.buffers[values]
 
-  // maxY = Math.max(maxY, 1)
+    minY = Math.min(...adj)
+    maxY = Math.max(...adj)
+    runningMin.get(values)?.unshift(minY)
+    runningMax.get(values)?.unshift(maxY)
 
-  ctx.lineWidth = 1
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
+    let runs = 1
+    minY = (runningMin.get(values)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
+    maxY = (runningMax.get(values)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
+    maxY = Math.min(maxY, 2500)
+    minY = Math.max(minY, 0)
+    state.ranges = state.ranges.map(r => r.key === values ? {
+        min: (Math.round(minY * 100) / 100).toFixed(2),
+        max: (Math.round(maxY * 100) / 100).toFixed(2),
+        key: values
+    } : r)
 
-  let w = ctx.canvas.width;
-  let h = ctx.canvas.height;
 
-  let lastX = 0;
-  let mass = w / (adj.length)
+    ctx.lineWidth = 1
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
 
-  let lastY = Math.max(map_range(adj[0], minY, maxY, 0, h / 8), 2)
-  ctx.beginPath()
-  for (let i = 1; i < adj.length; i++) {
-    let x = i * mass;
-    let y = Math.max(map_range(adj[i], minY, maxY, 0, h / 8), 2)
-    ctx.moveTo(x, -y + yLevel)
-    ctx.lineTo(lastX, -lastY + yLevel)
-    lastX = x;
-    lastY = y;
-  }
-  ctx.closePath()
-  ctx.stroke()
+    let w = ctx.canvas.width;
+    let h = ctx.canvas.height;
+    ctx.beginPath()
+    ctx.moveTo(0, h / 2)
+    ctx.lineTo(w, h / 2)
+    ctx.closePath()
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.moveTo(0, h - 4)
+    ctx.lineTo(w, h - 4)
+    ctx.closePath()
+    ctx.stroke()
+
+    let lastX = 0;
+    let mass = w / (adj.length)
+
+    let lastY = Math.max(map_range(adj[0], minY, maxY, 20, h / 2 - 20), 2)
+    ctx.beginPath()
+    for (let i = 1; i < adj.length; i++) {
+        let x = i * mass;
+        let y = Math.max(map_range(adj[i], minY, maxY, 20, h / 2 - 20), 2)
+        ctx.moveTo(lastX, (yLevel) - lastY)
+        ctx.lineTo(x, (yLevel) - y)
+        lastX = x;
+        lastY = y;
+    }
+    ctx.closePath()
+    ctx.stroke()
 }
 
 </script>
@@ -261,18 +286,19 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number, color: strin
   <div class="w-100">
     <div class="canvas-group element">
 
-      <div style="height: 2rem" class="d-flex gap-1 justify-content-between w-100">
-        <div class="d-flex gap-2 label d-flex flex-row align-items-center px-2">{{ props.name }} <span
-            class="text-muted">I: {{ state.buffers[0].length }} Q: {{ state.buffers[1].length }}</span></div>
-        <div v-for="item in Array(state.min.size).keys()" class="d-flex gap-1 ">
-          <div class="d-flex gap-2 tag label">
-            <div>{{ state.max.get(item) }} mV /</div>
-            <div>{{ state.min.get(item) }} mV</div>
-          </div>
-
-
+        <div class="d-flex gap-1 justify-content-between w-100" style="height: 2.75rem">
+            <div class="d-flex gap-2 label d-flex flex-row align-items-center px-2">{{ props.name }} <span
+                    class="text-muted">I: {{ state.buffers[0].length }} Q: {{ state.buffers[1].length }}</span></div>
+            <div class="d-flex gap-1 ">
+                <div v-for="r in state.ranges" :key="state.ranges.indexOf(r)">
+                    <div class="d-flex gap-1 align-items-center">
+                        <Tag :value="`${r.min} mV`" name="vMin" style="width: 5rem"></Tag>
+                        <Tag :value="`${r.max} mV`" name="vMax" style="width: 5rem"></Tag>
+                        <Divider v-if="state.ranges.indexOf(r) === 0"></Divider>
+                    </div>
+                </div>
+            </div>
         </div>
-      </div>
       <div class="canvas-container">
         <canvas :id="`signal-${state.uuid}`" class="inner-canvas"></canvas>
       </div>

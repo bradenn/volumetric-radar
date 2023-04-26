@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {onMounted, onUnmounted, reactive, watchEffect} from "vue";
+import {onMounted, onUnmounted, reactive} from "vue";
 import {v4 as uuidv4} from "uuid";
 import {Canvas, Point, Space} from "@/graphicsUtils";
 
@@ -92,8 +92,8 @@ function positionUnclick(e: MouseEvent) {
 function zoom(e: WheelEvent) {
   e.preventDefault()
 
-  space.size += e.deltaY > 0?-1:1
-  console.log(e)
+  space.size += e.deltaY > 0 ? -0.125 : 0.125
+    console.log(e)
 }
 
 function positionTrack(e: MouseEvent) {
@@ -146,17 +146,18 @@ function draw() {
 </script>
 
 <template>
-  <div class="element d-flex flex-column gap-2 px-2 py-2" style="height: 75vh">
-    <div class="d-flex w-100 justify-content-between">
-      <input type="text" class="text-box" placeholder="Untitled Zone"/>
-      <div class="d-flex gap-1">
-        <div class="surface button"><i class="fa-solid fa-floppy-disk"></i></div>
-        <div class="surface button" @click="reset"><i class="fa-solid fa-trash-can"></i></div>
-      </div>
+    <div class="element d-flex flex-column gap-2 px-2 py-2 mt-2" style="height: 75vh">
+        <div class="d-flex w-100 justify-content-between">
+            <input class="text-box" placeholder="Untitled Zone" type="text"/>
+            <div class="d-flex gap-1">
+                <div class="surface button"><i class="fa-solid fa-floppy-disk"></i></div>
+                <div class="surface button" @click="reset"><i class="fa-solid fa-trash-can"></i></div>
+            </div>
+        </div>
+        <canvas :id="state.cvs.Id" class="inner-canvas w-100 h-100 surface" style="" tabindex=0 @contextmenu="positionUnclick"
+                @mousedown="positionClick" @mousemove="positionTrack"
+                @wheel="zoom"></canvas>
     </div>
-    <canvas  tabindex=0 :id="state.cvs.Id" style="" class="inner-canvas w-100 h-100 surface" @wheel="zoom" @mousemove="positionTrack" @mousedown="positionClick"
-            @contextmenu="positionUnclick"></canvas>
-  </div>
     {{state.data}}
 </template>
 

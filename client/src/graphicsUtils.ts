@@ -250,8 +250,8 @@ export class Space {
         const mx = x
         const my = y
         return {
-            x: Math.floor(mx / (xs / w)),
-            y: Math.floor(my / (ys / h))
+            x: Math.round(mx / (xs / w)),
+            y: Math.round(my / (ys / h))
         } as Point
     }
 
@@ -263,6 +263,89 @@ export class Space {
         const ttt = tt * t;
         const p = uuu * p0 + 3 * uu * t * p1 + 3 * u * tt * p2 + ttt * p3;
         return p;
+    }
+
+    draw(ctx: CanvasRenderingContext2D) {
+        // Define canvas dimensions
+        const xs = this.width
+        const ys = this.height
+        // Define number of cells
+        const count = this.size;
+        // Define number of x and y cells
+        const w = Math.ceil((xs / ys) * count)
+        const h = count
+        // Define the current cell occupied by the cursor
+        const mx = this.cursor.x - (xs / w) / 2
+        const my = this.cursor.y - (xs / w) / 2
+
+        const px = Math.round(mx / (xs / w)) * (xs / w);
+        const py = Math.round(my / (ys / h)) * (ys / h);
+
+        ctx.lineWidth = 2
+        ctx.strokeStyle = `rgba(102, 99, 97, 0.2)`;
+        ctx.fillStyle = `rgba(102, 99, 97, 0.8)`;
+        ctx.font = '400 12px JetBrains Mono'
+
+        function drawGrid() {
+            for (let x = 0; x <= w; x++) {
+                ctx.beginPath()
+                ctx.moveTo((xs / w) * x, 0);
+                ctx.lineTo((xs / w) * x, ys);
+                ctx.fillText(`${x}`, (xs / w) * x + 6, 16)
+                ctx.stroke()
+                ctx.closePath()
+            }
+            for (let y = 0; y <= h; y++) {
+                ctx.beginPath()
+                ctx.moveTo(0, (ys / h) * y);
+                ctx.lineTo(xs, (ys / h) * y);
+                ctx.fillText(`${y}`, 4, (ys / h) * y - 8)
+                ctx.stroke()
+                ctx.closePath()
+            }
+
+        }
+
+        function drawVertices(space: Space) {
+
+            ctx.fillStyle = colorAccent2;
+            ctx.font = "500 32px JetBrains Mono"
+            ctx.fillText(`${space.editMode ? "Edit" : "View"}`, 20, space.height - 20)
+
+            ctx.lineWidth = 5
+            ctx.lineCap = "round"
+
+            ctx.fillStyle = colorAccent0;
+            ctx.strokeStyle = colorAccent1
+
+            ctx.beginPath()
+            for (let x = 0; x < space.verticies.length; x++) {
+                let gx = space.verticies[x].x * (xs / w)
+                let gy = space.verticies[x].y * (ys / h)
+                ctx.lineTo(gx, gy);
+                ctx.fillRect(gx - (xs / w) / 4 / 2, gy - (ys / h) / 4 / 2, (xs / w) / 4, (ys / h) / 4)
+                ctx.font = "500 24px JetBrains Mono"
+            }
+            ctx.stroke()
+            ctx.fill()
+            ctx.closePath()
+        }
+
+
+        drawGrid()
+        drawVertices(this)
+        this.drawCursor(ctx)
+
+        // if(this.editMode){
+        //     ctx.beginPath()
+        //     let last = this.verticies[this.verticies.length-1]
+        //     if(!last) return
+        //     ctx.moveTo(last.x, last.y)
+        //     ctx.lineTo(this.cursor.x, this.cursor.y)
+        //     ctx.closePath()
+        //     ctx.stroke()
+        // }
+
     }
 
     private drawCursor(ctx: CanvasRenderingContext2D) {
@@ -285,7 +368,7 @@ export class Space {
         // let gx = -this.bezierLerp((this.cursor.x-px)/(xs / w), 1, 0, 1, 0)*(xs / w) / 2
         // let gy = -this.bezierLerp((this.cursor.x-px)/(xs / w), 1, 0, 1, 0)*(xs / w) / 2
 
-        ctx.strokeRect(px - (xs / w) / 4, py- (ys / h) / 4, (xs / w) / 2, (ys / h) / 2)
+        ctx.strokeRect(px - (xs / w) / 4, py - (ys / h) / 4, (xs / w) / 2, (ys / h) / 2)
 
 
         ctx.fillStyle = colorAccent2;
@@ -312,91 +395,6 @@ export class Space {
         ctx.save()
         ctx.fillText(char, px - m.width / 2, py + 26 / 3)
         ctx.restore()
-    }
-
-
-    draw(ctx: CanvasRenderingContext2D) {
-        const xs = this.width
-        const ys = this.height
-        const count = this.size;
-
-        const w = Math.ceil((xs / ys) * count)
-        const h = count
-        const mx = this.cursor.x - (xs / w) / 2
-        const my = this.cursor.y - (xs / w) / 2
-
-        const px = Math.round(mx / (xs / w)) * (xs / w);
-        const py = Math.round(my / (ys / h)) * (ys / h);
-
-        ctx.lineWidth = 2
-        ctx.strokeStyle = `rgba(102, 99, 97, 0.2)`;
-        ctx.fillStyle = `rgba(102, 99, 97, 0.8)`;
-        ctx.font = '400 12px JetBrains Mono'
-        for (let y = 0; y <= h; y++) {
-            ctx.beginPath()
-            ctx.moveTo(0, (ys / h) * y);
-            ctx.lineTo(xs, (ys / h) * y);
-            ctx.fillText(`${y}`, 4, (ys / h) * y - 8)
-            ctx.stroke()
-            ctx.closePath()
-        }
-        for (let x = 0; x <= w; x++) {
-            ctx.beginPath()
-            ctx.moveTo((xs / w) * x, 0);
-            ctx.lineTo((xs / w) * x, ys);
-            ctx.fillText(`${x}`, (xs / w) * x + 6, 16)
-            ctx.stroke()
-            ctx.closePath()
-        }
-        ctx.fillStyle = colorAccent2;
-        ctx.strokeStyle = colorAccent1
-        ctx.font = "500 32px JetBrains Mono"
-        ctx.fillText(`${this.editMode ? "Edit" : "View"}`, 20, this.height - 20)
-
-        ctx.lineWidth = 5
-        ctx.lineCap = "round"
-        // ctx.moveTo(this.verticies[0].x * (xs / w), this.verticies[0].y * (ys / h));
-        ctx.beginPath()
-        for (let x = 0; x < this.verticies.length; x++) {
-            let gx = this.verticies[x].x * (xs / w)
-            let gy = this.verticies[x].y * (ys / h)
-            ctx.lineTo(gx, gy);
-            ctx.fillRect(gx - (xs / w) / 4 / 2, gy - (ys / h) / 4 / 2, (xs / w) / 4, (ys / h) / 4)
-            ctx.font = "500 24px JetBrains Mono"
-
-            // ctx.fillText(`${x}`, gx - (xs / w) / 4 / 2, gy - (ys / h) / 4 / 2)
-            // ctx.ellipse(px, py, (xs / w) / 4, (ys / h) / 4, 0, Math.PI * 2, 0)
-            // ctx.fill()
-        }
-
-
-        if (this.editMode) {
-            // ctx.fillText("ESC to Cancel", this.cursor.x, this.cursor.y)
-            // ctx.lineTo(px, py);
-        } else {
-            // ctx.fillText("E", this.cursor.x, this.cursor.y)
-            // ctx.beginPath()
-            ctx.moveTo(this.cursor.x, this.cursor.y)
-            // ctx.lineTo(px, py)
-            // ctx.strokeRect(px, py, (xs / w), (ys / h))
-            // ctx.stroke()
-            // ctx.closePath()
-
-        }
-
-        // ctx.lineTo(this.verticies[0].x * (xs / w) + (xs / w) / 2, this.verticies[0].y * (ys / h) + (ys / h) / 2);
-        ctx.stroke()
-        ctx.fillStyle = colorAccent0;
-        ctx.fill()
-        ctx.closePath()
-        this.drawCursor(ctx)
-
-        if (!this.editMode) return
-
-
-        // ctx.fillRect(this.center.x* (xs/w), this.center.y*(ys/h), 10, 10)
-
-
     }
 
 }

@@ -11,7 +11,7 @@ interface Datatype {
 }
 
 let props = defineProps<Datatype>();
-const cols = 100
+const cols = 400
 const rows = props.values0.length
 const maxBuff = rows * cols
 

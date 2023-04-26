@@ -79,32 +79,31 @@ function matchedFilter(signal: number[], filter: number[]): number[] {
 }
 
 function draw() {
-  let ctx = state.ctx;
-  if (!ctx.canvas) return
-  ctx.lineWidth = 2
-  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-  // drawLegend()
-  let w = ctx.canvas.width;
-  let h = ctx.canvas.height;
-  ctx.strokeStyle = "rgba(255,255,255,0.125)";
-  ctx.beginPath()
-  ctx.moveTo(0, h / 1.25)
-  ctx.lineTo(w, h / 1.25)
-  ctx.stroke()
-  ctx.closePath()
-  if (!props.spectrum) return;
-  let scale = w / props.spectrum.length;
+    let ctx = state.ctx;
+    if (!ctx.canvas) return
+    // ctx.lineWidth = 2
+    // ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    // drawLegend()
+    let w = ctx.canvas.width;
+    let h = ctx.canvas.height;
+    // ctx.strokeStyle = "rgba(255,255,255,0.125)";
+    // ctx.beginPath()
+    // ctx.moveTo(0, h / 1.25)
+    // ctx.lineTo(w, h / 1.25)
+    // ctx.stroke()
+    // ctx.closePath()
+    if (!props.spectrum) return;
 
-  // for (let i = 0; i < props.spectrum.length; i++) {
-  //   ctx.beginPath()
-  //   ctx.moveTo(i * scale, h / 1.25 - 2)
-  //   ctx.lineTo(i * scale, h / 1.25 + 2)
-  //   ctx.stroke()
-  //   ctx.closePath()
-  // }
-
-
-  drawPattern(ctx, props.spectrum, -1, false)
+    // for (let i = 0; i < props.spectrum.length; i++) {
+    //   ctx.beginPath()
+    //   ctx.moveTo(i * scale, h / 1.25 - 2)
+    //   ctx.lineTo(i * scale, h / 1.25 + 2)
+    //   ctx.stroke()
+    //   ctx.closePath()
+    // }
+    ctx.fillStyle = "rgba(0,0,0,0.3)"
+    ctx.fillRect(0, 0, w, h)
+    drawPattern(ctx, props.spectrum, -1, false)
 }
 
 
@@ -117,71 +116,70 @@ let runningMax: Map<number, number[]> = new Map<number, number[]>()
 
 function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: number, useRelative: boolean) {
 
-  let minY = 0
-  let maxY = 50
+    let minY = 0
+    let maxY = 50
+    //
+    // if (!runningMin.get(0)) {
+    //   runningMin.set(0, [])
+    // }
+    //
+    // if (!runningMax.get(0)) {
+    //   runningMax.set(0, [])
+    // }
 
-  if (!runningMin.get(0)) {
-    runningMin.set(0, [])
-  }
+    values = values
+    minY = Math.min(...values);
+    state.min = Math.round(minY * 100) / 100;
+    maxY = Math.max(...values);
+    // runningMin.get(0)?.unshift(minY)
+    // runningMax.get(0)?.unshift(maxY)
+    // let runs = 1
+    // minY = (runningMin.get(0)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
+    // maxY = (runningMax.get(0)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
 
-  if (!runningMax.get(0)) {
-    runningMax.set(0, [])
-  }
+    let w = ctx.canvas.width;
+    let h = ctx.canvas.height;
 
-  // values = resampleData(values, ctx.canvas.width);
-  minY = Math.min(...values);
-  state.min = Math.round(minY * 100) / 100;
-  maxY = Math.max(...values);
-  runningMin.get(0)?.unshift(minY)
-  runningMax.get(0)?.unshift(maxY)
-  let runs = 1
-  minY = (runningMin.get(0)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
-  maxY = (runningMax.get(0)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
+    let lastX = 0;
+    let mass = w / values.length
+    ctx.lineWidth = mass
 
-  let w = ctx.canvas.width;
-  let h = ctx.canvas.height;
+    let lastY = map_range(values[0], minY, maxY, h / 1.25, h / 1.25 - (ctx.canvas.height) / 1.5);
+    ctx.beginPath()
+    for (let i = 1; i < values.length; i++) {
+        let x = i * mass;
+        let y = map_range(values[i], minY, maxY, h / 1.25, h / 1.25 - (ctx.canvas.height) / 1.5)
 
-  let lastX = 0;
-  let mass = w / (values.length)
-  ctx.lineWidth = mass / 1.25
+        ctx.strokeStyle = `rgba(10, 128, 255, ${0.8})`;
+        ctx.moveTo(x, h / 1.25)
+        ctx.lineTo(x, y)
+        lastX = x;
+        lastY = y;
+    }
+    ctx.stroke()
+    ctx.closePath()
+    if (props.frequencies && props.lut) {
+        state.top = props.frequencies.map(f => props.lut[f])
+    }
+    // ctx.putImageData(id, 0, 0);
 
-  let lastY = map_range(values[0], minY, maxY, h / 1.25, h / 1.25 - (ctx.canvas.height) / 1.5);
-  ctx.beginPath()
-  for (let i = 1; i < values.length; i++) {
-    let x = i * mass;
-    let y = map_range(values[i], minY, maxY, h / 1.25, h / 1.25 - (ctx.canvas.height) / 1.5)
-    let clr = map_range(values[i], minY, maxY, 1, 0.25)
-    ctx.strokeStyle = `rgba(10, 128, 255, ${clr})`;
-    let divs = 1
-    ctx.moveTo(x, h / 1.25)
-    ctx.lineTo(x, y)
-    lastX = x;
-    lastY = y;
-  }
-  ctx.stroke()
-  ctx.closePath()
-  if (props.frequencies && props.lut) {
-    state.top = props.frequencies.map(f => props.lut[f])
-  }
+    // ctx.fill()
+    ctx.fillStyle = 'rgba(255,255,255, 0.75)';
+    ctx.strokeStyle = 'rgba(255,255,255, 0.25)';
+    ctx.font = "20px JetBrains Mono"
+    for (let i = 0; i < props.frequencies.length; i++) {
+        let ln = `${Math.round(props.lut[props.frequencies[i]] * 10) / 10}Hz`;
+        let mt = ctx.measureText(ln);
+        let x = props.frequencies[i] * mass
+        ctx.beginPath()
+        ctx.moveTo(x, h / 1.25 + 6)
+        ctx.lineTo(x, h / 1.25 + mt.fontBoundingBoxAscent / 2)
+        ctx.stroke()
+        ctx.closePath()
 
 
-  // ctx.fill()
-  // ctx.fillStyle = 'rgba(255,255,255, 0.75)';
-  // ctx.strokeStyle = 'rgba(255,255,255, 0.25)';
-  // ctx.font = "20px JetBrains Mono"
-  // for (let i = 0; i < props.frequencies.length; i++) {
-  //   let ln = `${Math.round(props.lut[props.frequencies[i]] * 10) / 10}Hz`;
-  //   let mt = ctx.measureText(ln);
-  //   let x = props.frequencies[i] * mass
-  //   ctx.beginPath()
-  //   ctx.moveTo(x, h / 1.25 + 6)
-  //   ctx.lineTo(x, h / 1.25 + mt.fontBoundingBoxAscent / 2)
-  //   ctx.stroke()
-  //   ctx.closePath()
-  //
-  //
-  //   ctx.fillText(ln, x - mt.width / 2, h / 1.25 + mt.fontBoundingBoxAscent * 1.75)
-  // }
+        ctx.fillText(ln, x - mt.width / 2, h / 1.25 + mt.fontBoundingBoxAscent * 1.75)
+    }
 
 }
 
