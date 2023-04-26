@@ -29,7 +29,7 @@ func main() {
 		return
 	}
 
-	us.AddUnit("ws://10.0.1.133/ws")
+	us.AddUnit("ws://10.0.1.141/ws")
 
 	for {
 	}
