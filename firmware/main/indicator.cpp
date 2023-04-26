@@ -141,17 +141,20 @@ void indicatorThread(void *params) {
         int value = (int) (LEDC_RESOLUTION/2.0 + sin(div * step) * (double) LEDC_RESOLUTION/2.0);
 
 //        printf("%d\n", value);
-
+        bool running = false;
         if (mask & (1 << 0)) {
             indicator->setIndicatorDuty(0, value);
+            running=true;
         } else if (mask & (1 << 1)) {
             indicator->setIndicatorDuty(1, value);
+            running=true;
         } else if (mask & (1 << 2)) {
             indicator->setIndicatorDuty(2, value);
+            running=true;
         }
 
 
-        vTaskDelay(pdMS_TO_TICKS(stepDelay));
+        vTaskDelay(pdMS_TO_TICKS(running?stepDelay:1000));
 
     }
 

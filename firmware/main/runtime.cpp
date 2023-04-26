@@ -44,6 +44,7 @@ Runtime::Runtime() {
             Indicator::instance().setIndicator(FAULT, true);
             return;
         }
+        return;
     } else {
         state = CONNECTING;
         err = net.startSTA({.ssid = ssid, .passwd = passwd});
@@ -54,8 +55,9 @@ Runtime::Runtime() {
         }
         printf("Connected\n");
         Indicator::instance().setIndicator(LINK, true);
-        Server();
     }
+
+    Server();
 
 }
 
