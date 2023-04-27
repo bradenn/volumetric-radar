@@ -21,6 +21,8 @@
 
 class Sample {
 public:
+    Sample();
+
     explicit Sample(RingbufHandle_t handle);
 
     ~Sample();
@@ -33,6 +35,9 @@ private:
     adc_cali_handle_t calHandle{};
 
 
+    esp_err_t initializeCalibrationProfile();
+
+    esp_err_t initializeContinuousAdc();
 };
 
 

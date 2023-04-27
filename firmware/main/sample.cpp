@@ -7,51 +7,7 @@
 
 static TaskHandle_t adcTaskHandle;
 
-esp_err_t configureADC(adc_continuous_handle_t *adcContinuousHandle) {
-
-    int channelMap[SAMPLE_CHANNEL_COUNT] = {CONFIG_vRADAR_I1, CONFIG_vRADAR_Q1, CONFIG_vRADAR_Q2, CONFIG_vRADAR_I2};
-
-
-    adc_continuous_handle_cfg_t continuousHandleCfg = {
-            .max_store_buf_size = SAMPLE_CONVERSION_FRAME_SIZE * 2,
-            .conv_frame_size = SAMPLE_CONVERSION_FRAME_SIZE,
-    };
-
-    esp_err_t err;
-    err = adc_continuous_new_handle(&continuousHandleCfg, adcContinuousHandle);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-
-    adc_continuous_config_t adcContinuousConfig = {
-            .pattern_num = SAMPLE_CHANNEL_COUNT,
-            .sample_freq_hz = 4 * (1024 * 20),
-            .conv_mode = ADC_CONV_SINGLE_UNIT_1,
-            .format = ADC_DIGI_OUTPUT_FORMAT_TYPE2,
-    };
-
-    adc_digi_pattern_config_t adcDigiPatternConfig[SOC_ADC_PATT_LEN_MAX] = {};
-    for (int i = 0; i < SAMPLE_CHANNEL_COUNT; i++) {
-        adc_unit_t unit{};
-        adc_channel_t channel{};
-
-        err = adc_continuous_io_to_channel(channelMap[i], &unit, &channel);
-        if (err != ESP_OK) {
-            continue;
-        }
-
-        adcDigiPatternConfig[i].atten = ADC_ATTEN_DB_11;
-        adcDigiPatternConfig[i].channel = channel;
-        adcDigiPatternConfig[i].unit = unit;
-        adcDigiPatternConfig[i].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
-    }
-    adcContinuousConfig.adc_pattern = adcDigiPatternConfig;
-
-    adc_continuous_config(*adcContinuousHandle, &adcContinuousConfig);
-
-    return ESP_OK;
-}
+#define SAMPLE_ATTENUATION ADC_ATTEN_DB_11
 
 static bool IRAM_ATTR adcConversionDone(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void
 *user_data) {
@@ -62,6 +18,9 @@ static bool IRAM_ATTR adcConversionDone(adc_continuous_handle_t handle, const ad
 }
 
 esp_err_t Sample::listen(int64_t chirpDuration, uint16_t **out) {
+
+    adcTaskHandle = xTaskGetCurrentTaskHandle();
+
     esp_err_t err;
     err = adc_continuous_start(adcContinuousHandle);
     if (err != ESP_OK) {
@@ -69,16 +28,19 @@ esp_err_t Sample::listen(int64_t chirpDuration, uint16_t **out) {
     }
 
     const uint32_t maxLength = SAMPLE_CONVERSION_FRAME_SIZE;
+
     uint8_t buffer[maxLength] = {0};
     memset(buffer, 0x00, maxLength);
 
     uint32_t resolvedLength = 0;
     int offsets[4] = {0, 0, 0, 0};
+
     uint32_t remain;
+
     while (true) {
         remain = 0;
         // Calculate the remaining samples needed across all channels
-        for (int offset : offsets) {
+        for (int offset: offsets) {
             int channelRemain = ((int) chirpDuration - offset);
             remain += channelRemain * 4;
         }
@@ -135,22 +97,13 @@ esp_err_t Sample::listen(int64_t chirpDuration, uint16_t **out) {
             offsets[index]++;
         }
     }
-//    for (int i = 0; i < 4; ++i) {
-//        if (offsets[i] != 512) {
-//            printf("Offset index %d is %d\n", i, offsets[i]);
-//        }
-//    }
     // Stop the ADC from listening and free DMA memory
     adc_continuous_stop(adcContinuousHandle);
     return ESP_OK;
 }
 
-#define NUM_SAMPLES (SOC_ADC_DIGI_DATA_BYTES_PER_CONV*SAMPLE_CHANNEL_COUNT*SAMPLE_CONVERSIONS_PER_FRAME)
+esp_err_t initializeRadarGpio() {
 
-#define SAMPLE_BUFFER (NUM_SAMPLES * SAMPLE_CHANNEL_COUNT)
-
-Sample::Sample(RingbufHandle_t handle) {
-    rbHandle = handle;
     gpio_config_t io_conf = {
             .pin_bit_mask = (1ULL << CONFIG_vRADAR_ENABLE),
             .mode = GPIO_MODE_OUTPUT,
@@ -159,19 +112,66 @@ Sample::Sample(RingbufHandle_t handle) {
             .intr_type = GPIO_INTR_DISABLE,
     };
 
-    gpio_config(&io_conf);
+    esp_err_t err;
 
-    adcTaskHandle = xTaskGetCurrentTaskHandle();
-    gpio_set_level(static_cast<gpio_num_t>(CONFIG_vRADAR_ENABLE), 1);
+    err = gpio_config(&io_conf);
+    if (err != ESP_OK) {
+        return err;
+    }
 
+    err = gpio_set_level(static_cast<gpio_num_t>(CONFIG_vRADAR_ENABLE), 1);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t Sample::initializeContinuousAdc() {
+
+    int channelMap[SAMPLE_CHANNEL_COUNT] = {CONFIG_vRADAR_I1, CONFIG_vRADAR_Q1, CONFIG_vRADAR_Q2, CONFIG_vRADAR_I2};
+
+    adc_continuous_handle_cfg_t continuousHandleCfg = {
+            .max_store_buf_size = SAMPLE_CONVERSION_FRAME_SIZE * 2,
+            .conv_frame_size = SAMPLE_CONVERSION_FRAME_SIZE,
+    };
 
     esp_err_t err;
-//    adc_continuous_handle_t adcContinuousHandle{};
-
-    err = configureADC(&adcContinuousHandle);
+    err = adc_continuous_new_handle(&continuousHandleCfg, &adcContinuousHandle);
     if (err != ESP_OK) {
-        printf("ADC Config Failed: %s\n", esp_err_to_name(err));
-        return;
+        return err;
+    }
+
+    adc_continuous_config_t adcContinuousConfig = {
+            .pattern_num = SAMPLE_CHANNEL_COUNT,
+            .sample_freq_hz = 4 * (1024 * 20),
+            .conv_mode = ADC_CONV_SINGLE_UNIT_1,
+            .format = ADC_DIGI_OUTPUT_FORMAT_TYPE2,
+    };
+
+    adc_digi_pattern_config_t adcPatternConfig[SOC_ADC_PATT_LEN_MAX] = {};
+
+    for (int i = 0; i < SAMPLE_CHANNEL_COUNT; i++) {
+        adc_unit_t unit{};
+        adc_channel_t channel{};
+
+        err = adc_continuous_io_to_channel(channelMap[i], &unit, &channel);
+        if (err != ESP_OK) {
+            continue;
+        }
+
+        adcPatternConfig[i].atten = SAMPLE_ATTENUATION;
+        adcPatternConfig[i].channel = channel;
+        adcPatternConfig[i].unit = unit;
+        adcPatternConfig[i].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
+    }
+
+    adcContinuousConfig.adc_pattern = adcPatternConfig;
+
+    err = adc_continuous_config(adcContinuousHandle, &adcContinuousConfig);
+    if (err != ESP_OK) {
+        printf("Failed to configure continuous ADC: %s\n", esp_err_to_name(err));
+        return err;
     }
 
     adc_continuous_evt_cbs_t adcContinuousEvtCbs = {
@@ -180,25 +180,62 @@ Sample::Sample(RingbufHandle_t handle) {
 
     err = adc_continuous_register_event_callbacks(adcContinuousHandle, &adcContinuousEvtCbs, nullptr);
     if (err != ESP_OK) {
-        printf("ADC Register Failed: %s\n", esp_err_to_name(err));
-        return;
+        printf("Failed to register continuous adc event: %s\n", esp_err_to_name(err));
+        return err;
     }
 
+    return ESP_OK;
+}
+
+esp_err_t Sample::initializeCalibrationProfile() {
 
     adc_cali_curve_fitting_config_t cali_config = {
             .unit_id = ADC_UNIT_1,
-            .atten = ADC_ATTEN_DB_11,
+            .atten = SAMPLE_ATTENUATION,
             .bitwidth = ADC_BITWIDTH_12,
     };
 
     if (adc_cali_create_scheme_curve_fitting(&cali_config, &calHandle) != ESP_OK) {
         printf("ADC Calibration failed!\n");
+        return ESP_ERR_INVALID_STATE;
     }
 
+    return ESP_OK;
+}
+
+Sample::Sample() {
+
+    esp_err_t err;
+
+    err = initializeRadarGpio();
+    if (err != ESP_OK) {
+        printf("Failed to initialize the radar enable gpio: %s\n", esp_err_to_name(err));
+    }
+
+    err = initializeContinuousAdc();
+    if (err != ESP_OK) {
+        printf("Failed to initialized continuous adc: %s\n", esp_err_to_name(err));
+        return;
+    }
+
+    err = initializeCalibrationProfile();
+    if (err != ESP_OK) {
+        printf("Failed to initialized adc calibration profile: %s\n", esp_err_to_name(err));
+        return;
+    }
 
 }
 
 Sample::~Sample() {
+    esp_err_t err;
 
-    adc_continuous_deinit(adcContinuousHandle);
+    err = adc_cali_delete_scheme_curve_fitting(calHandle);
+    if (err != ESP_OK) {
+        printf("Failed to initialize the radar enable gpio: %s\n", esp_err_to_name(err));
+    }
+
+    err = adc_continuous_deinit(adcContinuousHandle);
+    if (err != ESP_OK) {
+        printf("Failed to initialize the radar enable gpio: %s\n", esp_err_to_name(err));
+    }
 }
