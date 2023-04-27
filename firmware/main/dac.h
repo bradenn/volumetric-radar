@@ -12,34 +12,25 @@
 
 class DAC {
 public:
-    DAC(TaskHandle_t handle, RingbufHandle_t pVoid);
+    explicit DAC(TaskHandle_t handle);
 
-    void enable();
-
-    void disable();
+    ~DAC();
 
     spi_device_handle_t device{};
     TaskHandle_t adcHandle{};
-    RingbufHandle_t rbHandle{};
+
+    int32_t audible = 0, chirp = 0;
 
 private:
 
-    void powerEnable();
+    gptimer_handle_t chirpTimer{};
+    esp_timer_handle_t configTimer{};
 
-    void powerDisable();
+    int initializeConfigurationTimer();
 
-    void loadOn();
+    esp_err_t initializeSPI();
 
-    void loadOff();
-
-    void setupDAC();
-
-
-
-    void send(uint16_t channel_a, uint16_t channel_b);
-
-
-//    static bool updateAnalog(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *params);
+    esp_err_t initializeChirpTimer();
 };
 
 
