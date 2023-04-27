@@ -9,8 +9,7 @@
 #include <lwip/sockets.h>
 #include <iomanip>
 #include <hal/gpio_types.h>
-#include <driver/pcnt_types_legacy.h>
-#include <driver/rmt_types_legacy.h>
+#include <driver/temperature_sensor.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/ringbuf.h"
@@ -51,10 +50,19 @@ static char *generateMetadata() {
     auto adc = cJSON_CreateObject();
     cJSON_AddNumberToObject(adc, "window", BUFFER_SIZE);
     cJSON_AddNumberToObject(adc, "bits", ADC_BIT_WIDTH);
-    cJSON_AddNumberToObject(adc, "samples", srv->sampling.samples);
-    cJSON_AddNumberToObject(adc, "frequency", srv->sampling.frequency);
-    cJSON_AddNumberToObject(adc, "prf", srv->sampling.prf);
-    cJSON_AddNumberToObject(adc, "pulse", srv->sampling.pulse);
+    auto settings = Settings::instance();
+    auto sampling = settings.getSampling();
+    cJSON_AddNumberToObject(adc, "samples", sampling.samples);
+    cJSON_AddNumberToObject(adc, "frequency", sampling.frequency);
+    cJSON_AddNumberToObject(adc, "prf", sampling.prf);
+    cJSON_AddNumberToObject(adc, "pulse", sampling.pulse);
+
+    auto system = settings.getSystem();
+    cJSON_AddNumberToObject(adc, "enabled", system.enabled);
+    cJSON_AddNumberToObject(adc, "audible", system.audible);
+    cJSON_AddNumberToObject(adc, "chirp", system.chirp);
+    cJSON_AddNumberToObject(adc, "gyro", system.gyro);
+
     // Add the adc object to the root objects
     cJSON_AddItemToObject(obj, "adc", adc);
     // Marshal the object to json as a string
@@ -94,9 +102,9 @@ static esp_err_t systemConfigHandler(httpd_req_t *req) {
         httpd_resp_set_status(req, HTTPD_400);
     }
 
-    auto s = Settings::instance();
-    s.systemFromJson(buf);
-    s.push();
+    auto s = &Settings::instance();
+    s->systemFromJson(buf);
+    s->push();
 
 
     httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
@@ -285,7 +293,7 @@ static void callback(SampleData *sd) {
 }
 
 
-static void sendMetadata(GyroData *gd) {
+static void sendMetadata(GyroData *gd, float temperature, int8_t rssi) {
     if (fd < 0) {
         vTaskDelay(1);
         return;
@@ -299,6 +307,8 @@ static void sendMetadata(GyroData *gd) {
     auto obj = cJSON_CreateObject();
     cJSON_AddNumberToObject(obj, "pitch", gd->pitch);
     cJSON_AddNumberToObject(obj, "roll", gd->roll);
+    cJSON_AddNumberToObject(obj, "temperature", temperature);
+    cJSON_AddNumberToObject(obj, "rssi", rssi);
 //    cJSON_AddStringToObject(obj, "buffer", over);
 
     char *buf = (char *) malloc(sizeof(char) * 512);
@@ -367,6 +377,14 @@ static const httpd_uri_t reboot = {
 
 
 void gyroWatcher(void *arg) {
+    temperature_sensor_handle_t temp_handle = nullptr;
+    temperature_sensor_config_t temp_sensor = {
+            .range_min = 10,
+            .range_max = 65,
+    };
+    ESP_ERROR_CHECK(temperature_sensor_install(&temp_sensor, &temp_handle));
+
+
     while (1) {
         size_t size = -1;
         void *dat = xRingbufferReceive(gyro_buffer, &size, portMAX_DELAY);
@@ -376,8 +394,25 @@ void gyroWatcher(void *arg) {
         }
 
         auto *data = (GyroData *) dat;
+        // Enable temperature sensor
+        ESP_ERROR_CHECK(temperature_sensor_enable(temp_handle));
+        // Get converted sensor data
+        float temp;
+        ESP_ERROR_CHECK(temperature_sensor_get_celsius(temp_handle, &temp));
+        // Disable the temperature sensor if it's not needed and save the power
+        ESP_ERROR_CHECK(temperature_sensor_disable(temp_handle));
+        wifi_ap_record_t ap_info;
+        esp_err_t err = esp_wifi_sta_get_ap_info(&ap_info);
+        int8_t rssi = -1;
 
-        sendMetadata(data);
+        if (err == ESP_OK) {
+
+            rssi = ap_info.rssi;
+        } else {
+            rssi = -1;
+        }
+
+        sendMetadata(data, temp, rssi);
 
         vRingbufferReturnItem(gyro_buffer, dat);
 
@@ -417,10 +452,29 @@ static int64_t loop = 0;
 void adcTask(void *arg) {
     auto s = new Sample(adc_buffer);
 
-    new DAC(xTaskGetCurrentTaskHandle(), dac_buffer);
+    new DAC(xTaskGetCurrentTaskHandle());
     last = esp_timer_get_time();
     int samples = 256;
-    while (1) {
+    while (true) {
+
+
+//        auto itemSize = xRingbufferGetMaxItemSize(adc_buffer);
+//        auto freeSize = xRingbufferGetCurFreeSize(adc_buffer);
+//
+//        if (freeSize < itemSize) {
+//            size_t size = 0;
+//            auto *item = xRingbufferReceive(adc_buffer, &size, 1);
+//            if (item != nullptr) {
+//                auto *data = (SampleData *) item;
+//                if (data->data != nullptr) {
+//                    for (int i = 0; i < 4; ++i) {
+//                        if (data->data[i] != nullptr) heap_caps_free(data->data[i]);
+//                    }
+//                    heap_caps_free(data->data);
+//                }
+//                vRingbufferReturnItem(adc_buffer, item);
+//            }
+//        }
 
         auto **data = (uint16_t **) heap_caps_malloc(sizeof(uint16_t *) * 4, MALLOC_CAP_SPIRAM);
         if (data == nullptr) {
@@ -472,7 +526,7 @@ void adcTask(void *arg) {
                 if (data[i] != nullptr) heap_caps_free(data[i]);
             }
             heap_caps_free(data);
-        }else{
+        } else {
 //            if (loop == 0) {
 //                printf("Collected Sample: Duration=%lld, Interval=%lld Last: %d\n", end - start, esp_timer_get_time() -
 //                last, sd.data[3][511]);
@@ -480,7 +534,6 @@ void adcTask(void *arg) {
 //            loop = (loop + 1) % 4;
 //            last = esp_timer_get_time();
         }
-
 
 
     }
@@ -518,14 +571,14 @@ Server::Server() {
         return;
     }
 
-    Settings *s = &Settings::instance();
+    Settings::instance();
     httpd_register_uri_handler(server, &config);
     httpd_register_uri_handler(server, &reboot);
     httpd_register_uri_handler(server, &options);
     httpd_register_uri_handler(server, &socket_get);
     httpd_register_uri_handler(server, &systemConf);
 
-    adc_buffer = xRingbufferCreate((sizeof(SampleData *)) * 512, RINGBUF_TYPE_NOSPLIT);
+    adc_buffer = xRingbufferCreate((sizeof(SampleData *)) * (256), RINGBUF_TYPE_NOSPLIT);
     if (adc_buffer == nullptr) {
         printf("Failed to create ring buffer\n");
     }

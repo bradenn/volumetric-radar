@@ -537,6 +537,7 @@ Network::Network() {
     esp_netif_create_default_wifi_ap();
     // Create station mode Wi-Fi connection
     esp_netif_create_default_wifi_sta();
+
     // Configure the system with the default modem settings
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     if (esp_wifi_init(&cfg) != ESP_OK) {
@@ -583,6 +584,7 @@ esp_err_t Network::scan() {
     if (err != ESP_OK) {
         return err;
     }
+
 
     return ESP_OK;
 }
@@ -704,7 +706,6 @@ esp_err_t Network::startAP() {
                     .max_connection = AP_MAX_CONN,
             }
     };
-
     // Define the parameters for station mode
     wifi_config_t staConfig = {
             .sta = {

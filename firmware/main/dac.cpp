@@ -110,7 +110,7 @@ static bool IRAM_ATTR chirpTriggerCallback(gptimer_handle_t timer,
 
     auto dac = (DAC *) user_ctx;
 
-    power = (power + 1) % (250);
+    power = (power + 1) % (125);
 
     if (power == 0) {
         BaseType_t xHigherPriorityTaskWoken = pdFALSE;

@@ -1,4 +1,4 @@
-menu "vRadar Rev2"
+menu "vRadar Config"
 
     config vRADAR_WIFI_SSID
         string "WIFI SSID"
@@ -9,31 +9,38 @@ menu "vRadar Rev2"
 
     config vRADAR_INDICATOR_S1
         int "The S1 indicator GPIO port."
-        default 13
+        default 17
     config vRADAR_INDICATOR_S2
         int "The S2 indicator GPIO port."
-        default 12
+        default 18
     config vRADAR_INDICATOR_S3
         int "The S3 indicator GPIO port."
-        default 11
+        default 8
+
+endmenu
+
+menu "K-LC7 Config"
+
+  config vRADAR_ENABLE
+        int "The digital GPIO pin used to activate the radar module."
+        default 16
 
     config vRADAR_I1
         int "The in-phase (I) IF signal GPIO port for the channel 1 receiver."
-        default 3
+        default 4
     config vRADAR_Q1
         int "The quadrature (Q) IF signal GPIO port for the channel 1 receiver."
-        default 4
+        default 5
     config vRADAR_Q2
         int "The quadrature (Q) IF signal GPIO port for the channel 2 receiver."
-        default 5
+        default 6
     config vRADAR_I2
         int "The in-phase (I) IF signal GPIO port for the channel 2 receiver."
-        default 6
+        default 7
 
     config vRADAR_FOV_X
         int "The horizontal field of view of the radar module."
         default 80
-
     config vRADAR_FOV_Y
         int "The vertical field of view of the radar module."
         default 34
@@ -43,3 +50,31 @@ menu "vRadar Rev2"
         default 24125000000
 
 endmenu
+
+menu "MCP4922 DAC Config"
+    config vRADAR_DAC_SHDN
+        int "Shutdown (SHDN)"
+        default 14
+    config vRADAR_DAC_CS
+        int "Chip Select (CS)"
+        default 12
+    config vRADAR_DAC_LDAC
+        int "Latch Digital-Analog Converter (LDAC)"
+        default 13
+    config vRADAR_DAC_SCK
+        int "Serial Clock SCK (SCK)"
+        default 11
+    config vRADAR_DAC_SDI
+        int "Serial Data Input (SDI)"
+        default 10
+endmenu
+
+menu "LSM6DSM Gyro Config"
+    config vRADAR_GYRO_SDA
+        int "Gyro I2C Serial Data (SDA)"
+        default 1
+    config vRADAR_GYRO_SCL
+        int "Gyro I2C Serial Clock (SCL)"
+        default 2
+endmenu
+

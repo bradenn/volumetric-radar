@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/gorilla/websocket"
 	"github.com/mjibson/go-dsp/fft"
-	"gonum.org/v1/gonum/dsp/fourier"
 	"gonum.org/v1/gonum/dsp/window"
 	"math"
 	"math/cmplx"
@@ -49,7 +48,7 @@ type UnitData struct {
 
 const (
 	FrameDigest = 12500
-	FrameRender = 12500 * 2
+	FrameRender = 33333
 )
 
 type Diagnostic struct {
@@ -65,18 +64,31 @@ type Diagnostic struct {
 }
 
 type Unit struct {
-	Pan        float64   `json:"pan"`
-	Tilt       float64   `json:"tilt"`
-	Channels   []Channel `json:"channels"`
-	Metadata   Metadata  `json:"metadata"`
-	Phase      []float64 `json:"phase"`
-	Distance   []float64 `json:"distance"`
-	Rate       float64   `json:"rate"`
-	lastChange bool
+	Rssi        float64   `json:"rssi"`
+	Temperature float64   `json:"temperature"`
+	Pan         float64   `json:"pan"`
+	Tilt        float64   `json:"tilt"`
+	Channels    []Channel `json:"channels"`
+	Metadata    Metadata  `json:"metadata"`
+	Phase       []float64 `json:"phase"`
+	Distance    []float64 `json:"distance"`
+	Rate        float64   `json:"rate"`
+	lastChange  bool
+}
+
+func alignArray(data []float64, sampleRate float64, order int) []float64 {
+	adcConversionTime := 1.0 / sampleRate
+	delay := adcConversionTime * float64(order-1)
+	numSamplesToShift := int(delay * sampleRate)
+	shiftedData := make([]float64, len(data)+numSamplesToShift)
+
+	copy(shiftedData[numSamplesToShift:], data)
+
+	return shiftedData
 }
 
 const BufferSize = 1
-const IncomingSize = 256 * (1)
+const IncomingSize = 256 * 8
 
 type RemoteUnit struct {
 	Unit Unit
@@ -361,34 +373,54 @@ func (r *RemoteUnit) digest() {
 	//}
 
 	unit := Unit{
-		Channels: make([]Channel, 2),
-		Metadata: r.Unit.Metadata,
-		Pan:      r.Unit.Pan,
-		Tilt:     r.Unit.Tilt,
+		Channels:    make([]Channel, 2),
+		Metadata:    r.Unit.Metadata,
+		Pan:         r.Unit.Pan,
+		Tilt:        r.Unit.Tilt,
+		Temperature: r.Unit.Temperature,
+		Rssi:        r.Unit.Rssi,
 	}
 	//unit.Channels[0].SignalI = []float64{}
 	//unit.Channels[0].SignalQ = []float64{}
 	cmp1 = removeDCOffset(cmp1)
 	cmp2 = removeDCOffset(cmp2)
 
+	//ff := fourier.NewCmplxFFT(len(cmp1))
+	//cmp1 = ff.Coefficients(nil, cmp1)
+	//cmp2 = ff.Coefficients(nil, cmp2)
 	//cmp1 = window.HannComplex(cmp1)
 	//cmp2 = window.HannComplex(cmp2)
+	//
+	//cmp1 = ff.Sequence(nil, cmp1)
+	//cmp1 = ff.Sequence(nil, cmp2)
 	//txSignal := linearChirp(24e9, 25.0e-3, 6.86645508e6, 256)
 	//
-	//chirp := generateSawtoothChirp(1024*20, 12.5e-3, 0, 6.86645508e6, 256)
+	//chirp := GenerateChirp(0, 1220703.125, 5e-3, 1024*20)
 	//chirp = undersample(chirp, 10)
-	//cmp1 = MatchedFilter(cmp1, txSignal)
-	//cmp2 = MatchedFilter(cmp2, txSignal)
+	//cmp1 = MatchedFilter(cmp1, chirp)
+	//cmp2 = MatchedFilter(cmp2, chirp)
 	phaseDiff := phaseDifference(cmp1, cmp2)
 	//aoa := angleOfApproach(phaseDiff, 0.01245606, 8.763)
-	unit.Phase = phaseDiff
-	unit.Distance = make([]float64, len(phaseDiff))
-	for _, c := range cmp1 {
 
+	degrees := 81.0
+	subdegrees := 4.0
+	totalDeg := degrees * subdegrees
+	bins := make([]float64, int(math.Floor(totalDeg)))
+
+	for _, f := range phaseDiff {
+		if f >= -40 && f <= 40 {
+			f *= subdegrees
+			idx := int(math.Floor(f) + (totalDeg / 2.0))
+			bins[idx]++
+		}
+
+	}
+	unit.Phase = bins
+	unit.Distance = make([]float64, len(bins))
+	for _, c := range cmp1 {
 		unit.Channels[0].SignalI = append(unit.Channels[0].SignalI, real(c))
 		unit.Channels[0].SignalQ = append(unit.Channels[0].SignalQ, imag(c))
 	}
-
 	//fmt.Println(findPeaks(cmp1, 20))
 	//unit.Channels[0].SignalI = bandpassFilter(unit.Channels[0].SignalI, 100, 10000, 20*1024, 4)
 	for _, c := range cmp2 {
@@ -409,26 +441,26 @@ func (r *RemoteUnit) digest() {
 	//if dx != 0 {
 	//	fmt.Println(CalculateDistance(pf1), CalculateDistance(pf2))
 	//}
-	ff := fourier.NewCmplxFFT(len(cmp1))
-	//cmp1_c = hanningWindow(cmp1_c)
-	//peak := findPeakIndex(cmp1_c)
-	//dist := calculateDistance(peak, 25e-3, 250e6, 299792458)
-	//freqs := []float64{}
-	//for i := 0; i < len(cmp1); i++ {
-	//	freqs = append(freqs, CalculateFrequency(i, 20*1024, len(cmp1_c)))
+	//ff := fourier.NewCmplxFFT(len(cmp1))
+	////cmp1_c = hanningWindow(cmp1_c)
+	////peak := findPeakIndex(cmp1_c)
+	////dist := calculateDistance(peak, 25e-3, 250e6, 299792458)
+	////freqs := []float64{}
+	////for i := 0; i < len(cmp1); i++ {
+	////	freqs = append(freqs, CalculateFrequency(i, 20*1024, len(cmp1_c)))
+	////}
+	////fmt.Println(freqs[peak])
+	////fmt.Println(dist)
+	//
+	//cmp1 = ff.Coefficients(nil, cmp1)
+	//for _, c := range cmp1[0 : len(cmp1)/2] {
+	//	unit.Channels[0].Spectrum = append(unit.Channels[0].Spectrum, cmplx.Abs(c))
 	//}
-	//fmt.Println(freqs[peak])
-	//fmt.Println(dist)
-
-	cmp1 = ff.Coefficients(nil, cmp1)
-	for _, c := range cmp1[0 : len(cmp1)/2] {
-		unit.Channels[0].Spectrum = append(unit.Channels[0].Spectrum, cmplx.Abs(c))
-	}
-
-	cmp2 = ff.Coefficients(nil, cmp2)
-	for _, c := range cmp2[0 : len(cmp2)/2] {
-		unit.Channels[1].Spectrum = append(unit.Channels[1].Spectrum, cmplx.Abs(c))
-	}
+	//
+	//cmp2 = ff.Coefficients(nil, cmp2)
+	//for _, c := range cmp2[0 : len(cmp2)/2] {
+	//	unit.Channels[1].Spectrum = append(unit.Channels[1].Spectrum, cmplx.Abs(c))
+	//}
 
 	//p
 	unit.Metadata.Window = BufferSize * IncomingSize
@@ -461,13 +493,14 @@ func normalizePhaseDifference(phase float64) float64 {
 	}
 	return phase
 }
+
 func phaseDifference(cmp1 []complex128, cmp2 []complex128) []float64 {
 	var p []float64
 	for i := 0; i < len(cmp1); i++ {
 		p1 := cmp1[i]
 		p2 := cmp2[i]
-		phase1 := math.Atan2(imag(p1), real(p1))
-		phase2 := math.Atan2(imag(p2), real(p2))
+		phase1 := cmplx.Phase(p1)
+		phase2 := cmplx.Phase(p2)
 
 		difference := math.Asin(0.2257 * normalizePhaseDifference(phase1-phase2))
 		if !math.IsNaN(difference) {
@@ -591,12 +624,13 @@ func (r *RemoteUnit) process(data []byte) {
 		r.total = 0
 		r.start = time.Now()
 	}
-	//incoming[0] = normalizeArray(incoming[0])
-	//incoming[1] = normalizeArray(incoming[1])
-	//incoming[2] = normalizeArray(incoming[2])
-	//incoming[3] = normalizeArray(incoming[3])
+	incoming[0] = alignArray(incoming[0], 20480, 1)
+	incoming[1] = alignArray(incoming[1], 20480, 2)
+	incoming[2] = alignArray(incoming[2], 20480, 4)
+	incoming[3] = alignArray(incoming[3], 20480, 3)
 	var cmp1 []complex128
 	var cmp2 []complex128
+
 	//incoming[0] = bandpassFilter(incoming[0], 24e9, 1500, 20*1024, 1)
 	for i := range incoming[0] {
 
@@ -766,9 +800,11 @@ func scanNullTerminatedJSON(data []byte, atEOF bool) (advance int, token []byte,
 }
 
 type UnitMeta struct {
-	Pan    float64 `json:"pitch"`
-	Tilt   float64 `json:"roll"`
-	Buffer string  `json:"buffer"`
+	Pan         float64 `json:"pitch"`
+	Tilt        float64 `json:"roll"`
+	Buffer      string  `json:"buffer"`
+	Temperature float64 `json:"temperature"`
+	Rssi        float64 `json:"rssi"`
 }
 
 func (r *RemoteUnit) listen() {
@@ -795,6 +831,8 @@ func (r *RemoteUnit) listen() {
 			//fmt.Println(p)
 			r.Unit.Pan = p.Tilt
 			r.Unit.Tilt = p.Pan
+			r.Unit.Temperature = p.Temperature
+			r.Unit.Rssi = p.Rssi
 		}
 	}
 	//scanner := bufio.NewScanner(r.connection)

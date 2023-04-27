@@ -41,19 +41,21 @@ onUnmounted(() => {
 
 watchEffect(() => {
     if (!props.pings) return
+    let max = 0;
     for (let i = 0; i < props.pings.length; i++) {
         let deg = props.pings[i]
         // let dist = map_range(props.t[i], minT, maxT, ((r - 1) * slice) / 8, (r - 1) * slice)
-        let rnd = Math.round(deg)
-        if (rnd >= -40 && rnd <= 40) {
-            state.bins[rnd + 40]++
-        }
+
+        if(deg > max) max = deg;
+        state.resetTime = max
         // let labelX = Math.cos(degToRad(angleCenter + angle)) * dist
         // let labelY = Math.sin(degToRad(angleCenter + angle)) * dist
         //
         // // ctx.fillText(dist, offsetX + labelX - me.width / 2, offsetY + labelY);
         // ctx.fillRect(offsetX + labelX, offsetY + labelY, 10, 10)
     }
+
+
     return props.pings
 })
 
@@ -133,56 +135,36 @@ function drawRad(ctx: CanvasRenderingContext2D, w: number, h: number, r: number,
     // }
 
 
-    if (props.pings && props.t) {
-        let pings = props.pings
+    if (props.pings) {
+        let pings = props.pings as number[]
         let avg = 0
-
-
-        for (let j = 0; j < 80; j++) {
-            let angle = map_range(j, 0, 80, -40, 40)
-            let labelX = Math.cos(degToRad(angleCenter + angle)) * ((r - 1) * slice)
-            let labelY = Math.sin(degToRad(angleCenter + angle)) * ((r - 1) * slice);
-
-            let dist = map_range(state.bins[j], 0, 100, (r - 1) * slice, ((r - 1) * slice) / 2)
+        let lx = 0
+        let ly = 0
+        ctx.strokeStyle = "rgb(10,132,255,0.8)";
+        // let ldd = Math.cos(degToRad(angleCenter + -40))
+        // let ldy = Math.sin(degToRad(angleCenter + -40));
+        // ctx.moveTo(offsetX+ldd,offsetY+ ldy);
+        ctx.beginPath()
+        for (let j = 0; j < pings.length; j++) {
+            let angle = map_range(j, pings.length-1, 0, -40, 40)
+            let dist = map_range(pings[j], 0, state.resetTime, (r - 1) * slice, ((r - 1) * slice)-(r - 1) * slice/4)
             let px = Math.cos(degToRad(angleCenter + angle)) * dist
             let py = Math.sin(degToRad(angleCenter + angle)) * dist
-            ctx.beginPath()
-            ctx.moveTo(offsetX + labelX, offsetY + labelY)
+
+            ctx.moveTo(offsetX + lx, offsetY + ly)
             ctx.lineTo(offsetX + px, offsetY + py)
-            ctx.closePath()
-            ctx.stroke()
-            state.bins[j] = 0
+
+
+            lx = px
+            ly = py
+
         }
-
-        // avg /= props.t.length
-        // let dist = map_range(avg, minT, maxT, ((r - 1) * slice) / 8, (r - 1) * slice)
-        // let labelX = Math.cos(degToRad(angleCenter)) * dist
-        // let labelY = Math.sin(degToRad(angleCenter)) * dist
-        // // ctx.fillText(dist, offsetX + labelX - me.width / 2, offsetY + labelY);
-        // ctx.fillRect(offsetX + labelX, offsetY + labelY, 20, 20)
-
+            ctx.moveTo(offsetX + lx, offsetY + ly)
+        ctx.lineTo(offsetX, offsetY)
+        ctx.closePath()
+        ctx.stroke()
     }
-    //
-    //
-    // ctx.lineWidth = 2;
-    // ctx.beginPath()
-    // ctx.moveTo(offsetX, offsetY)
-    //
-    //
-    // // ctx.lineTo(offsetX + edgeLeftX, offsetY - edgeLeftY)
-    // ctx.stroke()
-    // ctx.closePath()
-    // ctx.beginPath()
-    // ctx.moveTo(offsetX, offsetY)
-    //
-    // let edgeRightX = Math.cos(degToRad(angleStop + 180)) * (r - 1) * slice
-    // let edgeRightY = Math.sin(degToRad(angleStop + 180)) * (r - 1) * slice
-    //
-    // ctx.lineTo(offsetX + edgeRightX, offsetY - edgeRightY)
-    // ctx.stroke()
-    // ctx.closePath()
 
-    let scale = 25;
 
 }
 
@@ -385,6 +367,8 @@ function drawPattern(ctx: CanvasRenderingContext2D, t: number[], r: number[], de
     background-color: hsla(214, 9%, 28%, 0.3);
     padding: 6px;
 
+    width: 80rem;
+
 
 }
 
@@ -402,7 +386,7 @@ function drawPattern(ctx: CanvasRenderingContext2D, t: number[], r: number[], de
     justify-content: center;
 
     width: 100%;
-    height: 100%;
+    /*height: 100%;*/
 
     align-items: center;
 

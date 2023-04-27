@@ -128,11 +128,21 @@ void Gyro::configTimerCallback(void *params) {
     auto system = settings.getSystem();
 
     if (gyro->rate != system.gyro) {
+
         esp_err_t err;
 
-        err = esp_timer_stop(gyro->taskTimer);
-        if (err != ESP_OK) {
-            printf("Failed to stop periodic taskTimer: %s\n", esp_err_to_name(err));
+        bool active = esp_timer_is_active(gyro->taskTimer);
+
+        if (active) {
+            err = esp_timer_stop(gyro->taskTimer);
+            if (err != ESP_OK) {
+                printf("Failed to stop periodic taskTimer: %s\n", esp_err_to_name(err));
+                return;
+            }
+        }
+
+        if (system.gyro <= 0) {
+            gyro->rate = system.gyro;
             return;
         }
 
