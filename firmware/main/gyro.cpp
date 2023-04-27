@@ -3,27 +3,16 @@
 //
 
 #include "gyro.h"
+#include "settings.h"
 
-#include <stdio.h>
-#include <esp_log.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "driver/i2c.h"
-#include "lsm6dsm_reg.h"
+#define I2C_MASTER_SDA_IO CONFIG_vRADAR_GYRO_SDA
+#define I2C_MASTER_SCL_IO CONFIG_vRADAR_GYRO_SCL
 
 #define I2C_MASTER_NUM I2C_NUM_0
-#define I2C_MASTER_SDA_IO 1
-#define I2C_MASTER_SCL_IO 2
 #define I2C_MASTER_FREQ_HZ 100000
 #define LSM6DSM_I2C_ADDRESS 0x6B
-
-static const char *TAG = "LSM6DSM";
-
-static int32_t platform_write(void *handle, uint8_t reg, const uint8_t *bufp,
-                              uint16_t len);
-
-static int32_t platform_read(void *handle, uint8_t reg, uint8_t *bufp,
-                             uint16_t len);
+#define GYRO_CONFIG_UPDATE_PERIOD (1000*1000)
+#define GYRO_POLL_PERIOD (1000*500)
 
 int32_t platform_read(void *handle, uint8_t reg, uint8_t *bufp, uint16_t len) {
     i2c_port_t i2c_num = *((i2c_port_t *) handle);
@@ -57,7 +46,8 @@ int32_t platform_write(void *handle, uint8_t reg, const uint8_t *bufp, uint16_t 
     return ret;
 }
 
-stmdev_ctx_t i2c_master_init() {
+esp_err_t Gyro::initializeGyroDevice() {
+
     i2c_config_t conf = {
             .mode = I2C_MODE_MASTER,
             .sda_io_num = I2C_MASTER_SDA_IO,
@@ -65,33 +55,44 @@ stmdev_ctx_t i2c_master_init() {
             .sda_pullup_en = GPIO_PULLUP_ENABLE,
             .scl_pullup_en = GPIO_PULLUP_ENABLE,
     };
-    conf.master.clk_speed = I2C_MASTER_FREQ_HZ,
-            i2c_param_config(I2C_MASTER_NUM, &conf);
-    i2c_driver_install(I2C_MASTER_NUM, conf.mode, 0, 0, 0);
-    auto *p = static_cast<i2c_port_t *>(malloc(sizeof(i2c_port_t)));
-    if (p == nullptr) {
-        // Handle memory allocation error
-        printf("Failed to allocate memory for i2c_port_t\n");
-        // You should return an error or an invalid dev_ctx in this case
+
+    conf.master.clk_speed = I2C_MASTER_FREQ_HZ, i2c_param_config(I2C_MASTER_NUM, &conf);
+
+    esp_err_t err;
+    err = i2c_driver_install(I2C_MASTER_NUM, conf.mode, 0, 0, 0);
+    if (err != ESP_OK) {
+        return err;
     }
+
+    auto *p = (i2c_port_t *) malloc(sizeof(i2c_port_t));
+    if (p == nullptr) {
+        printf("Failed to allocate memory for i2c_port_t\n");
+        return ESP_ERR_NO_MEM;
+    }
+
     *p = I2C_NUM_0;
-    // Configure LSM6DSM registers using the library
-    stmdev_ctx_t dev_ctx;
-    dev_ctx.write_reg = platform_write;
-    dev_ctx.read_reg = platform_read;
-    dev_ctx.handle = (void *) p;
 
-    lsm6dsm_xl_data_rate_set(&dev_ctx, LSM6DSM_XL_ODR_104Hz);
-    lsm6dsm_xl_full_scale_set(&dev_ctx, LSM6DSM_2g);
-    lsm6dsm_gy_data_rate_set(&dev_ctx, LSM6DSM_GY_ODR_104Hz);
-    lsm6dsm_gy_full_scale_set(&dev_ctx, LSM6DSM_2000dps);
+    device = {};
+    device.write_reg = platform_write;
+    device.read_reg = platform_read;
+    device.handle = (void *) p;
 
-    return dev_ctx;
+    // Configure Accelerometer data rate
+    lsm6dsm_xl_data_rate_set(&device, LSM6DSM_XL_ODR_104Hz);
+    lsm6dsm_xl_full_scale_set(&device, LSM6DSM_2g);
+
+    // Configure gyroscope data rate
+    lsm6dsm_gy_data_rate_set(&device, LSM6DSM_GY_ODR_104Hz);
+    lsm6dsm_gy_full_scale_set(&device, LSM6DSM_2000dps);
+
+    return ESP_OK;
+
 
 }
 
-void
-lsm6dsm_read_data(stmdev_ctx_t *dev_ctx, int16_t *ax, int16_t *ay, int16_t *az, int16_t *gx, int16_t *gy, int16_t *gz) {
+void lsm6dsm_read_data(stmdev_ctx_t *dev_ctx,
+                       int16_t *ax, int16_t *ay, int16_t *az, int16_t *gx, int16_t *gy, int16_t *gz) {
+
     uint8_t data_raw_accel[6];
     uint8_t data_raw_gyro[6];
 
@@ -110,42 +111,158 @@ lsm6dsm_read_data(stmdev_ctx_t *dev_ctx, int16_t *ax, int16_t *ay, int16_t *az, 
 
 
 void calculate_angles(int16_t ax, int16_t ay, int16_t az, float *roll, float *pitch) {
-    float ax_g = ax * 0.061 / 1000.0; // Convert to g (assuming ±4g scale)
-    float ay_g = ay * 0.061 / 1000.0; // Convert to g (assuming ±4g scale)
-    float az_g = az * 0.061 / 1000.0; // Convert to g (assuming ±4g scale)
+    float scale = 0.061;
 
-    *roll = atan2(-ay_g, -az_g) * 180.0 / M_PI;
-    *pitch = atan2(ax_g, sqrt(ay_g * ay_g + az_g * az_g)) * 180.0 / M_PI;
+    float ax_g = (float) ax * scale / 1000.0f; // Convert to g (assuming ±2g scale)
+    float ay_g = (float) ay * scale / 1000.0f; // Convert to g (assuming ±2g scale)
+    float az_g = (float) az * scale / 1000.0f; // Convert to g (assuming ±2g scale)
+
+    *roll = (float) atan2(-ay_g, -az_g) * 180.0f / (float) M_PI;
+    *pitch = (float) atan2(ax_g, sqrt(ay_g * ay_g + az_g * az_g)) * 180.0f / (float) M_PI;
 }
 
-struct GyroContext {
-    stmdev_ctx_t ctx{};
-    RingbufHandle_t handle{};
-};
+void Gyro::configTimerCallback(void *params) {
+    auto *gyro = (Gyro *) params;
 
-void Gyro::lsm6dsm_task(void *pvParameters) {
-    auto ctx = (GyroContext *) pvParameters;
+    auto settings = Settings::instance();
+    auto system = settings.getSystem();
+
+    if (gyro->rate != system.gyro) {
+        esp_err_t err;
+
+        err = esp_timer_stop(gyro->taskTimer);
+        if (err != ESP_OK) {
+            printf("Failed to stop periodic taskTimer: %s\n", esp_err_to_name(err));
+            return;
+        }
+
+        err = esp_timer_start_periodic(gyro->taskTimer, gyro->rate * 1000);
+        if (err != ESP_OK) {
+            printf("Failed to start periodic taskTimer: %s\n", esp_err_to_name(err));
+            return;
+        }
+
+        gyro->rate = system.gyro;
+
+    }
+
+
+}
+
+void Gyro::taskTimerCallback(void *params) {
+    auto *gyro = (Gyro *) params;
+
+    if (gyro->rate <= 0) return;
+
     int16_t ax, ay, az, gx, gy, gz;
     float roll, pitch;
+
     GyroData data{};
-    while (true) {
-        lsm6dsm_read_data(&ctx->ctx, &ax, &ay, &az, &gx, &gy, &gz);
-        calculate_angles(ax, ay, az, &roll, &pitch);
-        data.roll = roll;
-        data.pitch = pitch;
-        xRingbufferSend(ctx->handle, (void *) &data, sizeof(GyroData), 0);
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
+
+    lsm6dsm_read_data(&gyro->device, &ax, &ay, &az, &gx, &gy, &gz);
+    calculate_angles(ax, ay, az, &roll, &pitch);
+
+    data.roll = roll;
+    data.pitch = pitch;
+
+    xRingbufferSend(gyro->ringBuffer, (void *) &data, sizeof(GyroData), 0);
 }
 
-GyroContext gc = {};
-
-Gyro::Gyro(RingbufHandle_t handle) {
-    auto ctx = i2c_master_init();
-    gc = {
-            .ctx = ctx,
-            .handle = handle
+esp_err_t Gyro::initializeConfigurationTimer() {
+    configTimer = {};
+    // Define the periodic configuration timer
+    const esp_timer_create_args_t periodic_timer_args = {
+            .callback = configTimerCallback,
+            .arg = this,
+            .name = "gyroConfiguration"
     };
-    xTaskCreatePinnedToCore(lsm6dsm_task, "lsm6dsm_task", 4096, &gc, 5, nullptr, 1);
+    esp_err_t err;
+    // Initialize the periodic timer
+    err = esp_timer_create(&periodic_timer_args, &configTimer);
+    if (err != ESP_OK) {
+        return err;
+    }
+    // Set the periodic timer to update every second
+    err = esp_timer_start_periodic(configTimer, GYRO_CONFIG_UPDATE_PERIOD);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t Gyro::initializeTaskTimer() {
+    taskTimer = {};
+    rate = GYRO_POLL_PERIOD / 1000;
+    // Define the periodic configuration timer
+    const esp_timer_create_args_t periodic_timer_args = {
+            .callback = taskTimerCallback,
+            .arg = this,
+            .name = "gyroTask"
+    };
+
+    esp_err_t err;
+
+    // Initialize the periodic timer
+    err = esp_timer_create(&periodic_timer_args, &taskTimer);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    // Set the periodic timer to update every second
+    err = esp_timer_start_periodic(taskTimer, rate * 1000);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    return ESP_OK;
+}
+
+Gyro::Gyro(RingbufHandle_t handle) : ringBuffer(handle) {
+
+    esp_err_t err;
+
+    err = initializeGyroDevice();
+    if (err != ESP_OK) {
+        printf("Failed to initialize gyroscope: %s\n", esp_err_to_name(err));
+        return;
+    }
+
+    err = initializeConfigurationTimer();
+    if (err != ESP_OK) {
+        printf("Failed to initialize config timers: %s\n", esp_err_to_name(err));
+        return;
+    }
+
+    err = initializeTaskTimer();
+    if (err != ESP_OK) {
+        printf("Failed to initialize task timer: %s\n", esp_err_to_name(err));
+        return;
+    }
+
+}
+
+Gyro::~Gyro() {
+
+    esp_err_t err;
+    err = esp_timer_stop(configTimer);
+    if (err != ESP_OK) {
+        printf("Failed to stop configuration timer: %s\n", esp_err_to_name(err));
+    }
+
+    err = esp_timer_stop(taskTimer);
+    if (err != ESP_OK) {
+        printf("Failed to stop task timer: %s\n", esp_err_to_name(err));
+    }
+
+    err = i2c_master_stop(device.handle);
+    if (err != ESP_OK) {
+        printf("Failed to stop i2c master bus: %s\n", esp_err_to_name(err));
+    }
+
+    err = i2c_driver_delete(I2C_MASTER_NUM);
+    if (err != ESP_OK) {
+        printf("Failed to initialize the i2c driver: %s\n", esp_err_to_name(err));
+    }
 
 }

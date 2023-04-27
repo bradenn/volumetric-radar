@@ -5,10 +5,19 @@
 #ifndef RADAR_GYRO_H
 #define RADAR_GYRO_H
 
+#include <esp_timer.h>
+#include <cstdio>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/ringbuf.h"
 #include "lsm6dsm_reg.h"
+#include "driver/i2c.h"
+
+static int32_t platform_write(void *handle, uint8_t reg, const uint8_t *bufp,
+                              uint16_t len);
+
+static int32_t platform_read(void *handle, uint8_t reg, uint8_t *bufp,
+                             uint16_t len);
 
 typedef struct GyroData {
     float roll;
@@ -18,14 +27,33 @@ typedef struct GyroData {
 class Gyro {
 
 public:
-    Gyro();
 
-//    explicit Gyro(RingbufHandle_t pVoid);
+    explicit Gyro(RingbufHandle_t handle);
 
+    ~Gyro();
 
-    Gyro(RingbufHandle_t handle);
+private:
+    stmdev_ctx_t device{};
 
-    static void lsm6dsm_task(void *pvParameters);
+    TaskHandle_t task{};
+
+    esp_err_t initializeGyroDevice();
+
+    RingbufHandle_t ringBuffer;
+
+    esp_timer_handle_t configTimer{};
+
+    esp_timer_handle_t taskTimer{};
+
+    esp_err_t initializeConfigurationTimer();
+
+    int32_t rate = 0;
+
+    static void configTimerCallback(void *params);
+
+    esp_err_t initializeTaskTimer();
+
+    static void taskTimerCallback(void *params);
 };
 
 
