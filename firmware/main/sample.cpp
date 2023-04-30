@@ -20,10 +20,15 @@ static bool IRAM_ATTR adcConversionDone(adc_continuous_handle_t handle, const ad
 esp_err_t Sample::listen(int64_t chirpDuration, uint16_t **out) {
 
     adcTaskHandle = xTaskGetCurrentTaskHandle();
+    if (xSemaphoreTake(runtime, pdMS_TO_TICKS(1)) != pdTRUE) {
+        printf("Sample semaphore cannot lock!\n");
+        return ESP_ERR_TIMEOUT;
+    }
 
     esp_err_t err;
     err = adc_continuous_start(adcContinuousHandle);
     if (err != ESP_OK) {
+        xSemaphoreGive(runtime);
         return err;
     }
 
@@ -42,7 +47,7 @@ esp_err_t Sample::listen(int64_t chirpDuration, uint16_t **out) {
         // Calculate the remaining samples needed across all channels
         for (int offset: offsets) {
             int channelRemain = ((int) chirpDuration - offset);
-            remain += channelRemain * 4;
+            remain += channelRemain * SOC_ADC_DIGI_RESULT_BYTES;
         }
         // Return if there are no more samples to be collected
         if (remain == 0) {
@@ -99,6 +104,7 @@ esp_err_t Sample::listen(int64_t chirpDuration, uint16_t **out) {
     }
     // Stop the ADC from listening and free DMA memory
     adc_continuous_stop(adcContinuousHandle);
+    xSemaphoreGive(runtime);
     return ESP_OK;
 }
 
@@ -127,6 +133,40 @@ esp_err_t initializeRadarGpio() {
     return ESP_OK;
 }
 
+esp_err_t Sample::reinitialize() {
+    if (xSemaphoreTake(runtime, pdMS_TO_TICKS(5)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    esp_err_t err;
+    err = destructCalibrationProfile();
+    if (err != ESP_OK) {
+        xSemaphoreGive(runtime);
+        return err;
+    }
+
+    err = destructContinuousAdc();
+    if (err != ESP_OK) {
+        xSemaphoreGive(runtime);
+        return err;
+    }
+
+    err = initializeCalibrationProfile();
+    if (err != ESP_OK) {
+        xSemaphoreGive(runtime);
+        return err;
+    }
+
+    err = initializeContinuousAdc();
+    if (err != ESP_OK) {
+        xSemaphoreGive(runtime);
+        return err;
+    }
+
+    xSemaphoreGive(runtime);
+    return ESP_OK;
+}
+
 esp_err_t Sample::initializeContinuousAdc() {
 
     int channelMap[SAMPLE_CHANNEL_COUNT] = {CONFIG_vRADAR_I1, CONFIG_vRADAR_Q1, CONFIG_vRADAR_Q2, CONFIG_vRADAR_I2};
@@ -144,7 +184,7 @@ esp_err_t Sample::initializeContinuousAdc() {
 
     adc_continuous_config_t adcContinuousConfig = {
             .pattern_num = SAMPLE_CHANNEL_COUNT,
-            .sample_freq_hz = 4 * (1024 * 20),
+            .sample_freq_hz = 4 * (uint32_t) sampling.frequency,
             .conv_mode = ADC_CONV_SINGLE_UNIT_1,
             .format = ADC_DIGI_OUTPUT_FORMAT_TYPE2,
     };
@@ -191,7 +231,7 @@ esp_err_t Sample::initializeCalibrationProfile() {
 
     adc_cali_curve_fitting_config_t cali_config = {
             .unit_id = ADC_UNIT_1,
-            .atten = SAMPLE_ATTENUATION,
+            .atten = static_cast<adc_atten_t>(sampling.attenuation),
             .bitwidth = ADC_BITWIDTH_12,
     };
 
@@ -203,13 +243,41 @@ esp_err_t Sample::initializeCalibrationProfile() {
     return ESP_OK;
 }
 
-Sample::Sample() {
+esp_err_t Sample::destructContinuousAdc() {
 
     esp_err_t err;
+    err = adc_continuous_deinit(adcContinuousHandle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t Sample::destructCalibrationProfile() {
+
+    esp_err_t err;
+    err = adc_cali_delete_scheme_curve_fitting(calHandle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    return ESP_OK;
+}
+
+Sample::Sample() {
+    esp_err_t err;
+
+    runtime = xSemaphoreCreateMutex();
 
     err = initializeRadarGpio();
     if (err != ESP_OK) {
         printf("Failed to initialize the radar enable gpio: %s\n", esp_err_to_name(err));
+    }
+
+    err = initializeConfigurationTimer();
+    if (err != ESP_OK) {
+        printf("Failed to initialize the sample configuration timer: %s\n", esp_err_to_name(err));
     }
 
     err = initializeContinuousAdc();
@@ -226,16 +294,86 @@ Sample::Sample() {
 
 }
 
+void sampleConfigTimerCallback(void *params) {
+    auto sample = (Sample *) params;
+
+    auto settings = Settings::instance();
+    auto sampling = settings.getSystem().sampling;
+
+    bool runtimeChanged = false;
+
+    if (sample->sampling.attenuation != sampling.attenuation) {
+        runtimeChanged = true;
+    }
+
+    if (sample->sampling.samples != sampling.samples) {
+        runtimeChanged = true;
+    }
+
+    if (sample->sampling.frequency != sampling.frequency) {
+        runtimeChanged = true;
+    }
+
+    if (runtimeChanged) {
+        esp_err_t err;
+        err = sample->reinitialize();
+        if (err != ESP_OK) {
+            printf("Sample reinitialization failed: %s\n", esp_err_to_name(err));
+            return;
+        }
+        sample->sampling = sampling;
+    }
+
+}
+
+esp_err_t Sample::initializeConfigurationTimer() {
+    auto settings = Settings::instance();
+    sampling = settings.getSystem().sampling;
+
+    configTimer = {};
+    // Define the periodic configuration timer
+    const esp_timer_create_args_t periodic_timer_args = {
+            .callback = sampleConfigTimerCallback,
+            .arg = this,
+            .name = "sampleConfiguration"
+    };
+    esp_err_t err;
+    // Initialize the periodic timer
+    err = esp_timer_create(&periodic_timer_args, &configTimer);
+    if (err != ESP_OK) {
+        return err;
+    }
+    // Set the periodic timer to update every second
+    err = esp_timer_start_periodic(configTimer, 1000 * 1000);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    return ESP_OK;
+}
+
 Sample::~Sample() {
     esp_err_t err;
 
-    err = adc_cali_delete_scheme_curve_fitting(calHandle);
+    err = destructCalibrationProfile();
     if (err != ESP_OK) {
-        printf("Failed to initialize the radar enable gpio: %s\n", esp_err_to_name(err));
+        printf("Failed to destruct calibration profile: %s\n", esp_err_to_name(err));
     }
 
-    err = adc_continuous_deinit(adcContinuousHandle);
+    err = destructContinuousAdc();
     if (err != ESP_OK) {
-        printf("Failed to initialize the radar enable gpio: %s\n", esp_err_to_name(err));
+        printf("Failed to destruct continuous adc: %s\n", esp_err_to_name(err));
     }
+
+    err = esp_timer_stop(configTimer);
+    if (err != ESP_OK) {
+        printf("Failed to stop sample configuration timer: %s\n", esp_err_to_name(err));
+    }
+
+    err = esp_timer_delete(configTimer);
+    if (err != ESP_OK) {
+        printf("Failed to destruct sample config timer: %s\n", esp_err_to_name(err));
+    }
+
+    vSemaphoreDelete(runtime);
 }

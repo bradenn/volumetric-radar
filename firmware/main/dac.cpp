@@ -97,20 +97,44 @@ void configTimerCallback(void *params) {
     auto dac = (DAC *) params;
     auto settings = Settings::instance();
     auto system = settings.getSystem();
-    dac->chirp = system.chirp;
+    auto delta = system.chirp;
+    printf("Steps: %ld, PRF: %ld, Duration: %ld, Resolution: %ld, Padding: %ld\n", delta.steps, delta.prf, delta
+            .duration, delta.resolution, delta.padding);
+    auto newInterval = delta.duration / delta.steps;
+    if (dac->delay != newInterval && newInterval > 0) {
+        dac->changeChirpInterval(newInterval);
+        dac->delay = newInterval;
+    }
+    // Calculate the dac steps per step
+    dac->stepResolution = dac->chirp.resolution / (dac->chirp.steps - (dac->chirp.padding * 2));
+    // Set the chirp
+
+    dac->chirp = delta;
+
     dac->audible = system.audible;
+
 }
 
 volatile int32_t alternate = 0;
 volatile int32_t power = 0;
+volatile int32_t pause = 0;
 
 static bool IRAM_ATTR chirpTriggerCallback(gptimer_handle_t timer,
-                                           const gptimer_alarm_event_data_t *_,
+                                           const gptimer_alarm_event_data_t *ed,
                                            void *user_ctx) {
 
     auto dac = (DAC *) user_ctx;
 
-    power = (power + 1) % (125);
+    if(pause > 0) {
+        pause--;
+        return true;
+    }
+
+    if(power == dac->chirp.steps - 1) {
+        pause = ((dac->chirp.prf - dac->chirp.duration) / dac->delay);
+    }
+
+    power = (power + 1) % (dac->chirp.steps);
 
     if (power == 0) {
         BaseType_t xHigherPriorityTaskWoken = pdFALSE;
@@ -118,21 +142,42 @@ static bool IRAM_ATTR chirpTriggerCallback(gptimer_handle_t timer,
         portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     }
 
-    if (dac->chirp > 0) {
+    if (power >= 0 && power < dac->chirp.steps) {
         // 0x3000 => [ch0, unbuffered, gain 1x, enabled]
-        transmit(dac->device, (uint16_t) (power % dac->chirp), 0x3000);
+        auto m = (dac->chirp.steps/2);
+        transmit(dac->device, (uint16_t) (m - abs(m - power)) * dac->stepResolution, 0x3000);
     }
 
     if (dac->audible > 0) {
         alternate = (alternate + 1) % dac->audible;
         if (alternate == 0) {
-            transmit(dac->device, (uint16_t) 2048, 0xF000);
+            transmit(dac->device, (uint16_t) 2048, 0xB000);
         } else {
-            transmit(dac->device, (uint16_t) 0, 0xF000);
+            transmit(dac->device, (uint16_t) 0, 0xB000);
         }
     }
 
+
     return true;
+}
+
+esp_err_t DAC::changeChirpInterval(int32_t interval) {
+    if (interval < 25) {
+        interval = 25;
+    };
+    gptimer_alarm_config_t alarm_on = {
+            .alarm_count = (uint64_t) interval, // period = 1s @resolution 1MHz
+            .reload_count = 0, // counter will reload with 0 on alarm event
+            .flags {
+                    .auto_reload_on_alarm = true, // enable auto-reload
+            }
+    };
+    esp_err_t err;
+    err = gptimer_set_alarm_action(chirpTimer, &alarm_on);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return ESP_OK;
 }
 
 esp_err_t DAC::initializeChirpTimer() {

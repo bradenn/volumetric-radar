@@ -6,6 +6,7 @@ body {
 
 .element {
   display: flex;
+  position: relative;
   flex-direction: row;
   align-items: center;
   filter: drop-shadow(0px 10px 60px rgba(0, 0, 0, 0.1));

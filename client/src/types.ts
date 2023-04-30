@@ -1,5 +1,3 @@
-
-
 export interface Device {
     id: string;
     created: string;
@@ -30,15 +28,23 @@ export interface Unit {
     rssi: number,
     channels: Channel[]
     metadata: {
+        chirp: {
+            prf: number
+            duration: number
+            steps: number
+            padding: number
+            resolution: number
+        },
+        sampling: {
+            frequency: number
+            samples: number
+            attenuation: number
+        },
         name: string // 80000Hz
         mac: string // 80000Hz
         base: number // 80000Hz
-        window: number // 80000Hz
-        samples: number   // 8Hz
-        prf: number   // 8Hz
         connected: boolean   // 8Hz
-        frequency: number   // 10000Hz
-        chirp: number // 1000Hz (once per ms)
+        // chirp: number // 1000Hz (once per ms)
     }
     rate: number
     phase: number[]

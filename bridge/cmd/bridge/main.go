@@ -30,6 +30,7 @@ func main() {
 	}
 
 	us.AddUnit("ws://10.0.1.141/ws")
+	//us.AddUnit("ws://localhost:4043/ws")
 
 	for {
 	}

@@ -21,11 +21,12 @@ let maxBuff = props.samples
 interface Range {
     min: string,
     max: string,
+    rms: string,
     key: number
 }
 
 const state = reactive({
-    ranges: [{min: '0', max: '0', key: 0}, {min: '0', max: '0', key: 1}] as Range[],
+    ranges: [{min: '0', max: '0', rms: '0', key: 0}, {min: '0', max: '0', rms: '0', key: 1}] as Range[],
     lastFew: [] as number[][],
     canvas: {} as HTMLCanvasElement,
     ctx: {} as CanvasRenderingContext2D,
@@ -249,14 +250,15 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number, color: strin
     let runs = 1
     minY = (runningMin.get(values)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
     maxY = (runningMax.get(values)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
-    maxY = Math.min(maxY, Infinity)
-    minY = Math.max(minY, 0)
+
     state.ranges = state.ranges.map(r => r.key === values ? {
         min: (Math.round(minY * 100) / 100).toFixed(2),
         max: (Math.round(maxY * 100) / 100).toFixed(2),
+        rms: (Math.round((maxY - minY) * 100) / 100).toFixed(2),
         key: values
     } : r)
-
+    // maxY = 3100
+    // minY = 0
 
     ctx.lineWidth = 1
     ctx.strokeStyle = color;
@@ -286,17 +288,18 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number, color: strin
 
 <template>
     <div class="w-100">
-        <div class="canvas-group element">
+        <div class="canvas-group element" style="z-index: 1 !important;">
 
             <div class="d-flex gap-1 justify-content-between w-100" style="height: 2.75rem">
                 <div class="d-flex gap-2 label d-flex flex-row align-items-center px-2">{{ props.name }} <span
-                        class="text-muted">I: {{ state.buffers[0].length }} Q: {{ state.buffers[1].length }}</span>
+                    class="text-muted">I: {{ state.buffers[0].length }} Q: {{ state.buffers[1].length }}</span>
                 </div>
                 <div class="d-flex gap-1 ">
                     <div v-for="r in state.ranges" :key="state.ranges.indexOf(r)">
                         <div class="d-flex gap-1 align-items-center">
                             <Tag :value="`${r.min} mV`" name="vMin" style="width: 5rem"></Tag>
                             <Tag :value="`${r.max} mV`" name="vMax" style="width: 5rem"></Tag>
+                            <Tag :value="`${r.rms} mV`" name="vΔ" style="width: 5rem"></Tag>
                             <Divider v-if="state.ranges.indexOf(r) === 0"></Divider>
                         </div>
                     </div>

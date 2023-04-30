@@ -14,6 +14,8 @@
 #include <driver/gpio.h>
 #include <esp_timer.h>
 #include <freertos/ringbuf.h>
+#include <freertos/semphr.h>
+#include "settings.h"
 
 #define SAMPLE_CHANNEL_COUNT 4
 #define SAMPLE_CONVERSIONS_PER_FRAME 32
@@ -23,21 +25,34 @@ class Sample {
 public:
     Sample();
 
-    explicit Sample(RingbufHandle_t handle);
 
     ~Sample();
 
     esp_err_t listen(int64_t chirpDuration, uint16_t **mk);
 
+    Sampling sampling{};
+
+
+    esp_err_t reinitialize();
+
 private:
-    RingbufHandle_t rbHandle{};
+
+    esp_timer_handle_t configTimer{};
     adc_continuous_handle_t adcContinuousHandle{};
     adc_cali_handle_t calHandle{};
-
+    SemaphoreHandle_t runtime;
+    esp_err_t initializeConfigurationTimer();
 
     esp_err_t initializeCalibrationProfile();
 
     esp_err_t initializeContinuousAdc();
+
+    esp_err_t destructCalibrationProfile();
+
+    esp_err_t destructContinuousAdc();
+
+    esp_err_t changeAttenuation(int32_t atten);
+
 };
 
 

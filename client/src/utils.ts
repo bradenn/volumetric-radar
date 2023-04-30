@@ -33,6 +33,24 @@ export function formatFrequency(frequency: number): string {
     return frequency.toFixed(2) + " " + unit;
 }
 
+//
+// export function formatFrequency(frequency: number): string {
+//     let unit = "Hz";
+//     if (frequency >= 1000) {
+//         frequency /= 1000;
+//         unit = "kHz";
+//     }
+//     if (frequency >= 1000) {
+//         frequency /= 1000;
+//         unit = "MHz";
+//     }
+//     if (frequency >= 1000) {
+//         frequency /= 1000;
+//         unit = "GHz";
+//     }
+//     return frequency.toFixed(2) + " " + unit;
+// }
+
 
 export function matchedFilter(signal: number[], filter: number[]): number[] {
     const signalLength = signal.length;

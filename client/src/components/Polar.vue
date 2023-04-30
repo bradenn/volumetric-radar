@@ -48,6 +48,7 @@ watchEffect(() => {
 
         if(deg > max) max = deg;
         state.resetTime = max
+        state.max = state.resetTime
         // let labelX = Math.cos(degToRad(angleCenter + angle)) * dist
         // let labelY = Math.sin(degToRad(angleCenter + angle)) * dist
         //
@@ -146,8 +147,8 @@ function drawRad(ctx: CanvasRenderingContext2D, w: number, h: number, r: number,
         // ctx.moveTo(offsetX+ldd,offsetY+ ldy);
         ctx.beginPath()
         for (let j = 0; j < pings.length; j++) {
-            let angle = map_range(j, pings.length-1, 0, -40, 40)
-            let dist = map_range(pings[j], 0, state.resetTime, (r - 1) * slice, ((r - 1) * slice)-(r - 1) * slice/4)
+            let angle = map_range(j, pings.length - 1, 0, -40, 40)
+            let dist = map_range(pings[j], 0, state.resetTime, (r - 1) * slice, ((r - 1) * slice) - (r - 1) * slice / 2)
             let px = Math.cos(degToRad(angleCenter + angle)) * dist
             let py = Math.sin(degToRad(angleCenter + angle)) * dist
 
