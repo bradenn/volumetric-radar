@@ -25,30 +25,23 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ud := pkg.UnitData{
+	ud := pkg.Metadata{
 		Name: "Demo Unit",
 		Mac:  "na",
 		Base: 24e9,
 		XFov: 80,
 		YFov: 34,
-		Adc: struct {
-			Chirp     pkg.Chirp `json:"chirp"`
-			Base      float64   `json:"base"`
-			Frequency float64   `json:"frequency"`
-			Samples   int       `json:"samples"`
-			Prf       int       `json:"prf"`
-			Window    int       `json:"window"`
-			Bits      int       `json:"bits"`
-			Pulse     int       `json:"pulse"`
-		}{
-			Chirp: pkg.Chirp{
-				PRF:        10,
-				Duration:   10,
-				Steps:      10,
-				Padding:    10,
-				Resolution: 1024,
-			},
-			Window: 256,
+		Chirp: pkg.Chirp{
+			Prf:        0,
+			Duration:   0,
+			Steps:      0,
+			Padding:    0,
+			Resolution: 0,
+		},
+		Sampling: pkg.Sampling{
+			Frequency:   0,
+			Samples:     0,
+			Attenuation: 0,
 		},
 	}
 
