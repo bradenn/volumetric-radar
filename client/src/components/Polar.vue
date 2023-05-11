@@ -21,6 +21,7 @@ const state = reactive({
     resetTime: 0,
     min: 0,
     max: 0,
+    distMax: 0,
     maxIndex: 0,
     top: [] as number[],
     avgOffset: 2,
@@ -40,15 +41,19 @@ onUnmounted(() => {
 })
 
 watchEffect(() => {
-    if (!props.pings) return
-    let max = 0;
+    if (!props.pings || !props.t) return
+    let max = 60;
+    let maxD = 1;
     for (let i = 0; i < props.pings.length; i++) {
         let deg = props.pings[i]
+        let dist = props.t[i]
         // let dist = map_range(props.t[i], minT, maxT, ((r - 1) * slice) / 8, (r - 1) * slice)
 
-        if(deg > max) max = deg;
+        if (deg > max) max = deg;
+        if (dist > maxD) maxD = dist;
         state.resetTime = max
         state.max = state.resetTime
+        state.distMax = maxD
         // let labelX = Math.cos(degToRad(angleCenter + angle)) * dist
         // let labelY = Math.sin(degToRad(angleCenter + angle)) * dist
         //
@@ -69,6 +74,20 @@ let runningMin: Map<number, number[]> = new Map<number, number[]>()
 let runningMax: Map<number, number[]> = new Map<number, number[]>()
 
 function drawRad(ctx: CanvasRenderingContext2D, w: number, h: number, r: number, ang: number, rot?: number) {
+
+    let numRows = r;
+    let numCols = 80;
+
+    let bins = [] as number[]
+    let dist = [] as number[]
+    for (let i = 0; i < numCols; i++) {
+        bins.push(0)
+    }
+
+    for (let i = 0; i < numCols; i++) {
+        dist.push(0)
+    }
+
     ctx.strokeStyle = "rgb(99,99,102)";
     ctx.fillStyle = "rgb(10,132,255,0.8)";
     let angleCenter = -90 + (!rot ? 0 : rot)
@@ -77,39 +96,41 @@ function drawRad(ctx: CanvasRenderingContext2D, w: number, h: number, r: number,
     let degToRad = (deg: number): number => deg * ((Math.PI) / 180)
     let slice = ((h) / r - 2)
     let offsetX = w / 2;
-    let offsetY = h - (h - slice * r) / 2;
-    ctx.font = "normal 22px JetBrains Mono"
-    for (let i = 1; i < r; i++) {
+    let offsetY = h - (h - slice * r + 1) / 8;
+    ctx.font = "normal 18px JetBrains Mono"
+    for (let i = r / 2; i < r; i++) {
 
         ctx.beginPath()
         ctx.arc(offsetX, offsetY, i * slice, degToRad(angleStart), degToRad(angleStop), false)
         if ((i) % 2 == 0 && i != 0) {
-            let dist = `${i}`
+            let dist = `${(i - 32) / 2}`
             let me = ctx.measureText(dist)
             let edgeLeftX = Math.cos(degToRad(angleStop)) * slice * i
             let edgeLeftY = Math.sin(degToRad(angleStop)) * slice * i
             ctx.fillText(dist, offsetX + edgeLeftX + me.actualBoundingBoxAscent, offsetY + edgeLeftY + me.actualBoundingBoxAscent);
         }
-        ctx.stroke()
+        // ctx.stroke()
         ctx.closePath()
     }
 
     ctx.fillStyle = "rgb(255,128,10,0.6)";
-    let numLabels = Math.ceil(ang / 10);
+    let numLabels = numCols;
     let degPerLabel = (ang / 2) / (numLabels / 2)
     for (let i = 0; i <= numLabels; i++) {
-        let labelX = Math.cos(degToRad(angleStart + (ang / numLabels) * i)) * (r - 1 / 1.5) * slice
-        let labelY = Math.sin(degToRad(angleStart + (ang / numLabels) * i)) * (r - 1 / 1.5) * slice
-        let dist = `${degPerLabel * (i - numLabels / 2)}`
-        let me = ctx.measureText(dist)
-        let edgeLeftX = Math.cos(degToRad(angleStart + (ang / numLabels) * i)) * (r - 1) * slice
-        let edgeLeftY = Math.sin(degToRad(angleStart + (ang / numLabels) * i)) * (r - 1) * slice
-        ctx.fillText(dist, offsetX + labelX - me.width / 2, offsetY + labelY);
-        ctx.beginPath()
-        ctx.moveTo(offsetX, offsetY)
-        ctx.lineTo(offsetX + edgeLeftX, offsetY + edgeLeftY)
-        ctx.stroke()
-        ctx.closePath()
+        let labelX = Math.cos(degToRad(angleStart + (ang / numLabels) * i)) * (r - 1 / 1.5 + 1) * slice
+        let labelY = Math.sin(degToRad(angleStart + (ang / numLabels) * i)) * (r - 1 / 1.5 + 1) * slice
+        if (i % 4 == 0) {
+            let dist = `${degPerLabel * (i - numLabels / 2)}°`
+            let me = ctx.measureText(dist)
+            let edgeLeftX = Math.cos(degToRad(angleStart + (ang / numLabels) * i)) * (r - 1) * slice
+            let edgeLeftY = Math.sin(degToRad(angleStart + (ang / numLabels) * i)) * (r - 1) * slice
+            ctx.fillText(dist, offsetX + labelX - me.width / 2, offsetY + labelY);
+        }
+        // ctx.beginPath()
+        // // ctx.moveTo(offsetX, offsetY)
+        // // ctx.lineTo(offsetX + edgeLeftX, offsetY + edgeLeftY)
+        // ctx.stroke()
+        // ctx.closePath()
     }
 
     let maxT = -1
@@ -136,8 +157,11 @@ function drawRad(ctx: CanvasRenderingContext2D, w: number, h: number, r: number,
     // }
 
 
-    if (props.pings) {
+    if (props.pings && props.t) {
         let pings = props.pings as number[]
+        let colAngle = ang / numCols
+
+
         let avg = 0
         let lx = 0
         let ly = 0
@@ -145,25 +169,67 @@ function drawRad(ctx: CanvasRenderingContext2D, w: number, h: number, r: number,
         // let ldd = Math.cos(degToRad(angleCenter + -40))
         // let ldy = Math.sin(degToRad(angleCenter + -40));
         // ctx.moveTo(offsetX+ldd,offsetY+ ldy);
-        ctx.beginPath()
+        // ctx.beginPath()
+        let maxBin = 0
         for (let j = 0; j < pings.length; j++) {
-            let angle = map_range(j, pings.length - 1, 0, -40, 40)
-            let dist = map_range(pings[j], 0, state.resetTime, (r - 1) * slice, ((r - 1) * slice) - (r - 1) * slice / 2)
-            let px = Math.cos(degToRad(angleCenter + angle)) * dist
-            let py = Math.sin(degToRad(angleCenter + angle)) * dist
+            let angle = Math.round(map_range(j, pings.length, 0, 0, numCols))
+            // let col = angle/colAngle
+            bins[angle] += props.pings[j];
+            if (bins[angle] > maxBin) maxBin = bins[angle]
 
-            ctx.moveTo(offsetX + lx, offsetY + ly)
-            ctx.lineTo(offsetX + px, offsetY + py)
+            // let dist = map_range(pings[j], 0, state.resetTime, 0,  h/4)
+            // let px = Math.cos(degToRad(angleCenter + angle)) * dist
+            // let py = Math.sin(degToRad(angleCenter + angle)) * dist
 
+            // ctx.moveTo(offsetX + lx, offsetY + ly)
+            // ctx.lineTo(offsetX + px, offsetY + py)
 
-            lx = px
-            ly = py
+            //
+            // lx = px
+            // ly = py
+
 
         }
-            ctx.moveTo(offsetX + lx, offsetY + ly)
-        ctx.lineTo(offsetX, offsetY)
-        ctx.closePath()
-        ctx.stroke()
+        let numLevels = 32
+        for (let j = r - numLevels; j < r; j++) {
+
+            for (let i = 0; i < numLabels; i++) {
+                ctx.strokeStyle = "rgba(99,99,102, 0.2)";
+                let intensity = map_range(bins[i], 0, maxBin, 0, 1)
+                let intensity2 = 1
+
+                let chk = map_range(bins[i], 0, maxBin, r - numLevels, r)
+
+                if (j >= chk) {
+                    intensity2 = Math.log10(bins[i]) / 10
+                }
+
+                ctx.fillStyle = `rgb(${255 * intensity * intensity2},${128 * intensity * intensity2},${12 * intensity * intensity2},${0.8})`;
+                ctx.beginPath()
+                let px1 = Math.cos(degToRad(angleStart + (ang / numLabels) * i)) * ((j)) * slice
+                let py1 = Math.sin(degToRad(angleStart + (ang / numLabels) * i)) * ((j)) * slice
+                ctx.moveTo(offsetX + px1, offsetY + py1)
+                let px2 = Math.cos(degToRad(angleStart + (ang / numLabels) * i)) * ((j) - 1) * slice
+                let py2 = Math.sin(degToRad(angleStart + (ang / numLabels) * i)) * ((j) - 1) * slice
+                ctx.lineTo(offsetX + px2, offsetY + py2)
+
+                let px3 = Math.cos(degToRad(angleStart + (ang / numLabels) * i + degPerLabel)) * ((j) - 1) * slice
+                let py3 = Math.sin(degToRad(angleStart + (ang / numLabels) * i + degPerLabel)) * ((j) - 1) * slice
+                ctx.lineTo(offsetX + px3, offsetY + py3)
+                let px4 = Math.cos(degToRad(angleStart + (ang / numLabels) * i + degPerLabel)) * ((j)) * slice
+                let py4 = Math.sin(degToRad(angleStart + (ang / numLabels) * i + degPerLabel)) * ((j)) * slice
+                ctx.lineTo(offsetX + px4, offsetY + py4)
+                ctx.lineTo(offsetX + px1, offsetY + py1)
+                ctx.closePath()
+                ctx.fill()
+                // ctx.stroke()
+            }
+        }
+
+        //     ctx.moveTo(offsetX + lx, offsetY + ly)
+        // ctx.lineTo(offsetX, offsetY)
+        // ctx.closePath()
+        // ctx.stroke()
     }
 
 
@@ -191,7 +257,7 @@ function draw() {
     let w = ctx.canvas.width;
     let h = ctx.canvas.height;
 
-    drawRad(ctx, w, h, 16, props.delta, 0);
+    drawRad(ctx, w, h, 64, props.delta, 0);
 
 
     // ctx.strokeStyle = "rgba(255,255,255,0.125)";
@@ -327,19 +393,11 @@ function drawPattern(ctx: CanvasRenderingContext2D, t: number[], r: number[], de
 
             <div class="d-flex gap-1 justify-content-between w-100" style="height: 1.6rem">
                 <div class="d-flex gap-2 label d-flex flex-row align-items-center px-2 ">{{ props.name }} <span
-                    class="text-muted"></span></div>
+                        class="text-muted"></span></div>
                 <div class="d-flex gap-1 ">
                     <div class="d-flex gap-2 tag label">
                         <div>&Delta;f</div>
                         <div>{{ props.delta }}&deg;</div>
-                    </div>
-                    <div class="d-flex gap-2 tag label">
-                        <div>min</div>
-                        <div>{{ state.min }}&deg;</div>
-                    </div>
-                    <div class="d-flex gap-2 tag label">
-                        <div>max</div>
-                        <div>{{ state.max }}&deg;</div>
                     </div>
                 </div>
             </div>
@@ -368,7 +426,7 @@ function drawPattern(ctx: CanvasRenderingContext2D, t: number[], r: number[], de
     background-color: hsla(214, 9%, 28%, 0.3);
     padding: 6px;
 
-    width: 80rem;
+    width: 40rem;
 
 
 }

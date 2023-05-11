@@ -5,24 +5,24 @@ import {onMounted, onUnmounted, reactive} from "vue";
 import {v4 as uuidv4} from "uuid";
 
 interface Datatype {
-  name: string
-  values0: number[]
-  values1: number[]
+    name: string
+    values0: number[]
+    values1: number[]
 }
 
 let props = defineProps<Datatype>();
-const cols = 400
-const rows = props.values0.length
+const cols = props.values0.length / 8
+const rows = 8
 const maxBuff = rows * cols
 
 const state = reactive({
-  lastFew: [] as number[][],
-  canvas: {} as HTMLCanvasElement,
-  ctx: {} as CanvasRenderingContext2D,
-  min: 0,
-  max: 0,
-  maxIndex: 0,
-  buffers: [[], [], [], []] as number[][],
+    lastFew: [] as number[][],
+    canvas: {} as HTMLCanvasElement,
+    ctx: {} as CanvasRenderingContext2D,
+    min: 0,
+    max: 0,
+    maxIndex: 0,
+    buffers: [[], [], [], []] as number[][],
   top: [] as number[],
   high: [] as number[],
   low: [] as number[],
@@ -199,54 +199,54 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number[], color: str
 
 
   ctx.lineWidth = 1
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
 
-  let w = ctx.canvas.width;
-  let h = ctx.canvas.height;
+    let w = ctx.canvas.width;
+    let h = ctx.canvas.height;
 
-  // ctx.beginPath()
+    // ctx.beginPath()
 
-  let dx = w / cols;
-  let dy = h / rows;
-  if (displacement <= 0) {
-    ctx.save()
-  }
-  // let id = ctx.getImageData(0, 0, w, h);
-  // let pixels = id.data;
-  // state.buffers.unshift(props.values0)
-  // if (state.buffers.length >= rows) {
-  //   state.buffers = state.buffers.slice(0, rows)
-  // }
-  ctx.translate(dx, 0)
-  displacement += dx;
-  // console.log(displacement)
-  if (displacement >= w) {
-    ctx.restore()
-    displacement = 0
-  }
-  //
-  // for (let i = 0; i < rows; i++) {
-  //   if (state.buffers.length <= i) break
-  let rowSet = resampleData(props.values0, rows);
-  for (let j = 0; j < rows; j++) {
-    // let x = Math.floor(map_range(i, 0, state.buffers[j].length, 0, w))
-    // let y = Math.floor(map_range(j, 0, state.buffers.length, 0, h))
-    let e = map_range(rowSet[j], minY, maxY, 0, 1)
-    // let r = 255 * e
-    // let g = 255 - e * 255
-    // let b = 255 * e
-    // let off = (y * id.width + x) * 4;
+    let dx = w / cols;
+    let dy = h / rows;
+    // if (displacement <= 0) {
+    //   ctx.save()
+    // }
+    // // let id = ctx.getImageData(0, 0, w, h);
+    // // let pixels = id.data;
+    // // state.buffers.unshift(props.values0)
+    // // if (state.buffers.length >= rows) {
+    // //   state.buffers = state.buffers.slice(0, rows)
+    // // }
+    // ctx.translate(dx, 0)
+    // displacement += dx;
+    // // console.log(displacement)
+    // if (displacement >= w) {
+    //   ctx.restore()
+    //   displacement = 0
+    // }
+    //
+    for (let i = 0; i < cols; i++) {
+        //   if (state.buffers.length <= i) break
+        let rowSet = props.values0;
+        for (let j = 0; j < rows; j++) {
+            // let x = Math.floor(map_range(i, 0, state.buffers[j].length, 0, w))
+            // let y = Math.floor(map_range(j, 0, state.buffers.length, 0, h))
+            let e = map_range(rowSet[i * cols + j], minY, maxY, 0, 1)
+            // let r = 255 * e
+            // let g = 255 - e * 255
+            // let b = 255 * e
+            // let off = (y * id.width + x) * 4;
     // pixels[off] = r;
     // pixels[off + 1] = g;
     // pixels[off + 2] = b;
     // pixels[off + 3] = 255;
-    ctx.fillStyle = `hsl(${e * 360}, 50%, 50%)`;
-    ctx.fillRect(0, j * dy, dx, dy)
+            ctx.fillStyle = `hsl(${e * 360}, 50%, 50%)`;
+            ctx.fillRect(i * dx, j * dy, dx, dy)
 
   }
 
-  // }
+    }
 
   // state.ctx.putImageData(id, 0, 0);
 

@@ -30,7 +30,7 @@ export function formatFrequency(frequency: number): string {
         frequency /= 1000;
         unit = "GHz";
     }
-    return frequency.toFixed(2) + " " + unit;
+    return frequency.toFixed(3) + " " + unit;
 }
 
 //

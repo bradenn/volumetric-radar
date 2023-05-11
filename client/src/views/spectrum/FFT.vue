@@ -168,7 +168,7 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number[], depth: num
     ctx.strokeStyle = 'rgba(255,255,255, 0.25)';
     ctx.font = "20px JetBrains Mono"
     for (let i = 0; i < props.frequencies.length; i++) {
-        let ln = `${Math.round(props.lut[props.frequencies[i]] * 10) / 10}Hz`;
+        let ln = `${Math.round(props.lut[props.frequencies.indexOf(props.frequencies[i])] * 10) / 10}Hz`;
         let mt = ctx.measureText(ln);
         let x = props.frequencies[i] * mass
         ctx.beginPath()

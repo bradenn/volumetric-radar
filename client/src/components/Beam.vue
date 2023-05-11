@@ -11,12 +11,16 @@ import type {Zone} from "@/types";
 import {v4 as uuidv4} from "uuid";
 import {TextGeometry} from "three/examples/jsm/geometries/TextGeometry";
 import {FontLoader} from "three/examples/jsm/loaders/FontLoader";
+import Tag from "@/components/Tag.vue";
 
 interface BeamProps {
     zone: Zone,
+    unit?: string
     data: number[],
     pitch: number,
     roll: number
+    x?: number,
+    y?: number
 }
 
 const props = defineProps<BeamProps>()
@@ -58,8 +62,7 @@ onUnmounted(() => {
 watchEffect(() => {
     if (frustum.isObject3D) {
         // frustum.rotateX(props.roll * (Math.PI/180))
-        frustum.rotation.set( (props.pitch-90) * (Math.PI/180), props.roll * (Math.PI/180),0)
-        // frustum.rotateZ(props.roll)
+        frustum.rotation.set((props.roll) * (Math.PI / 180), -(props.pitch) * (Math.PI / 180), 0)
     }
     return props.pitch
 })
@@ -126,10 +129,10 @@ function drawWalls(vertices: Vector2[], height: number): THREE.Object3D {
 function drawFrustum(x: number, y: number, z: number, fx: number, fy: number): THREE.Object3D {
     let obj = new THREE.Object3D()
 
-    let numPointsAzimuth = 12
-    let numPointsElevation = 12
-    let radius = 5.5
-    let azimuthRotationOffset = (Math.PI / 180) * ((90 - fx) + 45)
+    let numPointsAzimuth = 16
+    let numPointsElevation = 16
+    let radius = 4
+    let azimuthRotationOffset = (Math.PI / 180) * ((90 - fx / 2) - 90)
     let elevationRotationOffset = (Math.PI / 180) * ((90 - fy / 2))
     let sliceAzimuth = ((Math.PI / 180) * fx) / numPointsAzimuth
     let sliceElevation = ((Math.PI / 180) * fy) / numPointsElevation
@@ -183,6 +186,7 @@ function drawFrustum(x: number, y: number, z: number, fx: number, fy: number): T
     obj.translateX(x)
     obj.translateY(y)
     obj.translateZ(z)
+
 
 
     return obj
@@ -458,9 +462,9 @@ function drawRoom(vertices: Vector2[]): THREE.Object3D {
     let obj = new THREE.Object3D()
     obj.add(drawFloorPlan(vertices))
     let roof = drawFloorPlan(vertices)
-    roof.translateZ(-1.6)
+    roof.translateZ(-2.4)
     obj.add(roof)
-    obj.add(drawWalls(vertices, -1.6))
+    obj.add(drawWalls(vertices, -2.4))
 
     let maxX = Math.max(...vertices.map(b => b.x))
     let minX = Math.min(...vertices.map(b => b.x))
@@ -470,9 +474,9 @@ function drawRoom(vertices: Vector2[]): THREE.Object3D {
     let xc = -(maxX + minX) / 2
     let yc = -(maxY + minY) / 2
 
-    let frx = 2.6364428386
-    let fry = -2.3764444702117493
-    let frz = -1.2
+    let frx = props.x ? props.x : 10
+    let fry = props.y ? props.y : 10
+    let frz = -1.1
 
     frustum = drawFrustum(frx, fry, frz, 80, 34)
     obj.add(frustum)
@@ -531,7 +535,7 @@ function drawRoom(vertices: Vector2[]): THREE.Object3D {
     obj.rotateX((Math.PI / 180) * 90)
     obj.translateX(xc)
     obj.translateY(yc)
-    obj.translateZ(1.6 / 3)
+    obj.translateZ(2.4 / 3)
     let ax = new THREE.AxesHelper();
     scene.add(ax)
 
@@ -639,11 +643,11 @@ function init() {
     scene.add(room)
     let scale = 3.5 / (bfMax + Math.abs(bfMin))
     scene.scale.set(scale, scale, scale)
-    scene.rotateY((Math.PI / 180) * 90)
+    scene.rotateY((Math.PI / 180))
 
 
     goToTop();
-    toggleFrustum()
+    // toggleFrustum()
     toggleFrustum()
     animate()
 }
@@ -677,24 +681,30 @@ function animate() {
 <template>
     <div>
         <div class="canvas-group element">
-            <div class="d-flex gap-1 justify-content-between w-100" style="height: 1.6rem">
-                <div class="d-flex gap-2 label d-flex flex-row align-items-center px-2 ">{{ props.zone.name }}</div>
-                <div class="d-flex gap-1 ">
-                    <div class="d-flex tag label" @click="toggleFrustum">
-                        <div v-if="!state.showFrustum">Show Frustum</div>
-                        <div v-else>Hide Frustum</div>
+            <div class="d-flex gap-1 justify-content-between align-items-center w-100">
+                <div class="d-flex gap-2 label d-flex flex-row align-items-center px-2  flex-column">
+                    <div class="d-flex align-items-start flex-column justify-content-center">
+                        <div class="d-flex gap-2 label-c1 label d-flex flex-row align-items-center px-2">
+                            {{ props.zone.name }}
+                        </div>
+                        <div class="d-flex gap-2 label-c5 label-o3 px-2 font-monospace">{{ props.unit }}
+                        </div>
+
                     </div>
-                    <div class="d-flex gap-2 tag label" @click="goToTop">
-                        <div>Top</div>
-                    </div>
-                    <div class="d-flex gap-2 tag label" @click="goToSide">
-                        <div>Side</div>
-                    </div>
+
+                </div>
+                <div class="d-flex gap-1 align-items-center">
+                    <!--                    <div class="d-flex tag label" style="height: 100%" @click="toggleFrustum">-->
+                    <!--                        <div v-if="!state.showFrustum">Show Frustum</div>-->
+                    <!--                        <div v-else>Hide Frustum</div>-->
+                    <!--                    </div>-->
+                    <Tag :value="`${(Math.round(props.pitch*100)/100).toFixed(2)}&deg;`" name="Pitch"></Tag>
+                    <Tag :value="`${(Math.round(props.roll*100)/100).toFixed(2)}&deg;`" name="Roll"></Tag>
 
                 </div>
             </div>
 
-            <div class="beam-buffer">
+            <div class="beam-buffer" style="z-index: 0 !important;">
                 <div :id="`beam-canvas-${state.uuid}`" class="inner-canvas">
                 </div>
             </div>
@@ -741,6 +751,7 @@ function animate() {
     width: calc(100% - 6px * 2);
     aspect-ratio: 1.5/1;
     /*box-shadow: 0 0 4px 1px blue*/
+//height: 30rem;
 
 }
 

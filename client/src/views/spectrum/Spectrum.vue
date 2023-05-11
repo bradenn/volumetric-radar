@@ -7,6 +7,7 @@ import type {Channel, Unit} from "@/types";
 import {state} from "vue-tsc/out/shared";
 import Header from "@/components/Header.vue";
 import Tag from "@/components/Tag.vue";
+import Divider from "@/components/Divider.vue";
 
 // interface Unit {
 //   channel: Channel
@@ -49,17 +50,18 @@ const state = reactive({
     frequencies: [],
     peaks: []
   }] as Channel[],
-  canvas: {} as HTMLCanvasElement,
-  metadata: {
+    canvas: {} as HTMLCanvasElement,
+    metadata: {
 
-    last: 0,
-    since: 0,
-    count: 0,
-    updates: 0
-  },
-  start: 0,
-  ctx: {} as CanvasRenderingContext2D,
-  connected: false,
+        last: 0,
+        since: 0,
+        count: 0,
+        updates: 0
+    },
+    start: 0,
+    mode: 0,
+    ctx: {} as CanvasRenderingContext2D,
+    connected: false,
 })
 
 onMounted(() => {
@@ -131,17 +133,24 @@ function wsClose(e: Event) {
 
   <div class="d-flex flex-column gap-2 mt-3">
 
-    <Header name="Dashboard">
-      <Tag :active="state.connected?'label-success':'label-warning'" :value="state.connected?'Connected':'Disconnected'"
-           name="Bridge"></Tag>
-      <Tag :disabled="!state.connected" :value="`${state.metadata.updates.toFixed(2)} up/s`" name="Updates"></Tag>
-    </Header>
+      <Header name="Dashboard">
+          <Tag :active="state.connected?'label-success':'label-warning'"
+               :value="state.connected?'Connected':'Disconnected'"
+               name="Bridge"></Tag>
+          <Tag :disabled="!state.connected" :value="`${state.metadata.updates.toFixed(2)} up/s`" name="Updates"></Tag>
+          <Divider></Divider>
+          <Tag :value="state.mode == 0?'Signal':state.mode == 1?'Gyroscope':'Diagnostic'" name="Mode" style="cursor: pointer" @click="(e: MouseEvent) =>{
+            e.preventDefault()
+            state.mode = (state.mode + 1) % 3
+        }"></Tag>
+      </Header>
 
   </div>
 
   <div class="d-flex flex-column gap-1" v-if="state.connected">
     <div v-if="state.units.length > 0" class="d-flex flex-column gap-1 mt-2">
-      <UnitDom v-for="unit in state.units" :key="unit.metadata.mac" :name="unit.metadata.name" :unit="unit"></UnitDom>
+        <UnitDom v-for="unit in state.units" :key="unit.metadata.mac" :mode="state.mode" :name="unit.metadata.name"
+                 :unit="unit"></UnitDom>
     </div>
   </div>
 </template>

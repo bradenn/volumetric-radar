@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 
-import {reactive} from "vue";
+import {reactive, watchEffect} from "vue";
 import {v4} from "uuid";
 
 
@@ -23,7 +23,13 @@ const props = defineProps<TagProps>()
 
 const state = reactive({
     toggled: false,
+    value: props.value,
     id: v4(),
+})
+
+watchEffect(() => {
+    // state.value = props.value
+    return props.value
 })
 
 function touch(e: MouseEvent) {
@@ -34,10 +40,10 @@ function touch(e: MouseEvent) {
     target.style.display = state.toggled ? "grid" : "none";
 }
 
-function commitChange(e: MouseEvent, value: any) {
-    e.preventDefault()
+function commitChange(value: any) {
+    // e.preventDefault()
     if (props.change) {
-        props.change(value)
+        props.change(state.value)
     }
 }
 
@@ -50,7 +56,7 @@ function leave(e: MouseEvent) {
 </script>
 
 <template>
-    <div class="dropdown" @click="touch">
+    <div class="dropdown">
         <div :class="`${props.disabled?'element-fg-disabled':''} `" class="element-fg d-flex gap-2 align-items-center">
 
             <div class="d-flex flex-column align-items-start ">
@@ -60,39 +66,28 @@ function leave(e: MouseEvent) {
                 </div>
                 <div :class="`${props.active} ${props.border?`tag-border-${props.border}`:''}`"
                      class="label-c4 label-o5 label-mono">
-                    <slot></slot>
+                    <input v-model="state.value" class="number-select" type="number" @change="commitChange"/>
                 </div>
 
             </div>
-            <div class="caret">
-                ⌵
-            </div>
 
-        </div>
-        <div :id="state.id" class="dropdown-menu element" @mouseleave="leave">
-            <div v-for="option in props.options"
-                 :class="`${(`${props.value}` === `${option}`)?'element-fg':''}`"
-                 class="dropdown-option font-monospace label-c4"
-                 @click="(e) => commitChange(e, option)">
-                <div v-if="props.labels">
-                    {{ props.labels[props.options.indexOf(option)] }}
-                </div>
-                <div v-else>
-                    {{ option }}{{ props.unit ? props.unit : '' }}
-                </div>
-            </div>
         </div>
     </div>
 </template>
 
 <style scoped>
 
-.dropdown-option:hover {
-    background-color: hsla(214, 9%, 28%, 0.25);
+.number-select {
+    background-color: transparent;
+    border: none;
+    outline: none;
+    color: rgba(255, 255, 255, 0.625);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px;
 }
 
-.dropdown-option.element-fg {
-    padding: 12px 12px;
+.dropdown-option:hover {
+    background-color: hsla(214, 9%, 28%, 0.25);
 }
 
 .dropdown-option {
@@ -100,7 +95,8 @@ function leave(e: MouseEvent) {
     border-radius: 0.25rem;
     display: flex;
     justify-content: center;
-    padding: 12px 12px;
+    padding: 12px 18px;
+
 }
 
 .dropdown-option-active {
@@ -144,7 +140,7 @@ function leave(e: MouseEvent) {
 
     margin-top: 0.25rem;
     display: none;
-    grid-template-columns: repeat(4, minmax(2rem, 1fr));
+    grid-template-columns: repeat(4, minmax(3.5rem, 1fr));
     /*grid-template-rows: repeat(4, minmax(1rem, 1fr));*/
     flex-direction: row;
     flex-wrap: wrap;
