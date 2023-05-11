@@ -8,6 +8,7 @@
 #include <driver/timer_types_legacy.h>
 #include <esp_timer.h>
 #include <driver/gptimer.h>
+#include <cmath>
 #include "dac.h"
 #include "settings.h"
 
@@ -21,7 +22,7 @@
 #define SPI_HOST SPI2_HOST
 #define SPI_CLOCK 20000000
 
-#define CONFIG_UPDATE_PERIOD (1000 * 1000) // 1s
+#define CONFIG_UPDATE_PERIOD (1000 * 1250) // 1s
 
 esp_err_t DAC::initializeSPI() {
     // Define configuration for the Shutdown and DAC latch GPIO pins
@@ -98,15 +99,17 @@ void configTimerCallback(void *params) {
     auto settings = Settings::instance();
     auto system = settings.getSystem();
     auto delta = system.chirp;
-    printf("Steps: %ld, PRF: %ld, Duration: %ld, Resolution: %ld, Padding: %ld\n", delta.steps, delta.prf, delta
-            .duration, delta.resolution, delta.padding);
-    auto newInterval = delta.duration / delta.steps;
+
+    auto newInterval = (int) round((double)delta.duration / (double)delta.steps);
     if (dac->delay != newInterval && newInterval > 0) {
         dac->changeChirpInterval(newInterval);
         dac->delay = newInterval;
     }
+
     // Calculate the dac steps per step
-    dac->stepResolution = dac->chirp.resolution / (dac->chirp.steps - (dac->chirp.padding * 2));
+    dac->stepResolution = (int) round((double) dac->chirp.resolution / (double) (dac->chirp.steps));
+    dac->stepResolution = dac->stepResolution <= 0 ? 1 : dac->stepResolution;
+    printf("Resolution: %ld, Delay: %ld\n", dac->stepResolution, dac->delay);
     // Set the chirp
 
     dac->chirp = delta;
@@ -125,39 +128,51 @@ static bool IRAM_ATTR chirpTriggerCallback(gptimer_handle_t timer,
 
     auto dac = (DAC *) user_ctx;
 
-    if(pause > 0) {
+    if (pause > 0) {
         pause--;
         return true;
     }
 
-    if(power == dac->chirp.steps - 1) {
-        pause = ((dac->chirp.prf - dac->chirp.duration) / dac->delay);
-    }
 
     power = (power + 1) % (dac->chirp.steps);
 
-    if (power == 0) {
+    if (power == dac->chirp.steps - 1) {
+        pause = ((dac->chirp.prf - dac->chirp.duration) / dac->delay);
+        transmit(dac->device, (uint16_t) 0, 0x3000);
+        return true;
+    }
+
         BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-        vTaskNotifyGiveFromISR(dac->adcHandle, &xHigherPriorityTaskWoken)
-        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    if (power == 0) {
+        vTaskNotifyGiveFromISR(dac->adcHandle, &xHigherPriorityTaskWoken);
+
     }
 
     if (power >= 0 && power < dac->chirp.steps) {
         // 0x3000 => [ch0, unbuffered, gain 1x, enabled]
-        auto m = (dac->chirp.steps/2);
-        transmit(dac->device, (uint16_t) (m - abs(m - power)) * dac->stepResolution, 0x3000);
+        auto m = (dac->chirp.steps / 2);
+//        transmit(dac->device, (uint16_t) (m - abs(m - power)) * dac->stepResolution, 0x3000);
+        if (dac->chirp.padding > 0) {
+            // 0 -> 250 (res = 1/step)
+            // 0 -> 25 (10 interphase chirps) = (red = 10/step)
+            //
+            transmit(dac->device, (uint16_t) (power % dac->chirp.padding) *
+                                  (dac->stepResolution * (dac->chirp.steps / dac->chirp.padding)), 0x3000);
+        } else {
+            transmit(dac->device, (uint16_t) (power) * (dac->stepResolution), 0x3000);
+        }
     }
 
     if (dac->audible > 0) {
         alternate = (alternate + 1) % dac->audible;
         if (alternate == 0) {
-            transmit(dac->device, (uint16_t) 2048, 0xB000);
-        } else {
-            transmit(dac->device, (uint16_t) 0, 0xB000);
+            transmit(dac->device, (uint16_t) 2048, 0xF000);
+        } else if (alternate == 1) {
+            transmit(dac->device, (uint16_t) 0, 0xF000);
         }
     }
 
-
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     return true;
 }
 

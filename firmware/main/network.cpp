@@ -500,6 +500,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t eventBase, int32_t ev
                     xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
                 }
                 break;
+//            case WIFI_EVENT_AP_START:
+//                xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
             case WIFI_EVENT_AP_STACONNECTED: {
                 auto *apEvent = (wifi_event_ap_staconnected_t *) event_data;
                 printf("[AP] Device (" MAC_STR_FMT ") connected.\n", MAC2STR(apEvent->mac));
@@ -643,8 +645,14 @@ esp_err_t Network::startSTA(Credentials credentials) {
 
     wifi_config_t staConfig = {
             .sta = {
+                    .listen_interval = 3,
+                    .sort_method = WIFI_CONNECT_AP_BY_SIGNAL,
                     .threshold = {
                             .authmode = WIFI_AUTH_WPA2_PSK,
+                    },
+                    .pmf_cfg = {
+                            .capable = true,
+                            .required = false
                     },
             },
     };
@@ -668,6 +676,9 @@ esp_err_t Network::startSTA(Credentials credentials) {
     if (err != ESP_OK) {
         return err;
     }
+    // Disable power saving, it's already a hog to begin with
+    esp_wifi_set_ps(WIFI_PS_NONE);
+
     // Wait for the
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
                                            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
@@ -684,6 +695,77 @@ esp_err_t Network::startSTA(Credentials credentials) {
         printf("Unknown WIFI Event\n");
     }
 
+    return ESP_OK;
+}
+
+/**
+  * @brief Initialize & Start on-board access point
+  *
+  *
+  * @return
+  *    - ESP_OK: succeed
+  *    - ESP_ERR_WIFI_NOT_INIT: WiFi is not initialized by esp_wifi_init
+  *    - ESP_ERR_INVALID_ARG: invalid argument
+  */
+esp_err_t Network::startPassiveAP() {
+    s_wifi_event_group = xEventGroupCreate();
+    // Configure the wifi_event_handler function to handle WI-FI and IP events
+    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, nullptr, nullptr);
+    esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, nullptr, nullptr);
+    // Define the parameters for the access point
+    wifi_config_t apConfig = {
+            .ap = {
+                    .password = AP_PASSWD,
+                    .channel = AP_CHANNEL,
+                    .authmode = WIFI_AUTH_OPEN,
+                    .max_connection = AP_MAX_CONN,
+            }
+    };
+
+    // Set the AP name to reflect the device's unique mac address
+    generateApName(apConfig.ap.ssid);
+
+    esp_err_t err;
+    // Set the system Wi-Fi module to operate in access point mode
+    err = esp_wifi_set_mode(WIFI_MODE_AP);
+    if (err != ESP_OK) {
+        return err;
+    }
+    // Pass the configuration to the Wi-Fi subsystems
+    err = esp_wifi_set_config(WIFI_IF_AP, &apConfig);
+    if (err != ESP_OK) {
+        return err;
+    }
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    // Open the access point if needed
+    err = esp_wifi_start();
+    if (err != ESP_OK) {
+        return err;
+    }
+    // Disable power saving, it's already a hog to begin with
+
+//    // Scan for open networks
+//    err = scan();
+//    if (err != ESP_OK) {
+//        return err;
+//    }
+
+//    inet_pton(AF_INET, "192.168.4.1", &resolve_ip);
+//    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
+//                                           WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+//                                           pdFALSE,
+//                                           pdFALSE,
+//                                           portMAX_DELAY);
+////    httpServer(nullptr);
+////    xTaskCreate(dnsServer, "dnsServer", 4096, nullptr, 5, nullptr);
+//    if (bits & WIFI_CONNECTED_BIT) {
+//        printf("Access Point Open\n");
+//        return ESP_OK;
+//    } else if (bits & WIFI_FAIL_BIT) {
+//        printf("Connection failed after %d attempts\n", NETWORK_WIFI_RECONNECTS);
+//    } else {
+//        printf("Unknown WIFI Event\n");
+//    }
     return ESP_OK;
 }
 

@@ -19,8 +19,6 @@ public:
 
     void writeInt(const char *key, int32_t value) const;
 
-    void readInt(const char *key, int32_t *dest) const;
-
     void writeString(const char *key, const char *value) const;
 
     void readString(const char *key, char *dest) const;

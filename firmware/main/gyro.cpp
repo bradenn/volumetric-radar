@@ -146,7 +146,7 @@ void Gyro::configTimerCallback(void *params) {
             return;
         }
 
-        err = esp_timer_start_periodic(gyro->taskTimer, gyro->rate * 1000);
+        err = esp_timer_start_periodic(gyro->taskTimer, gyro->rate * 250);
         if (err != ESP_OK) {
             printf("Failed to start periodic taskTimer: %s\n", esp_err_to_name(err));
             return;

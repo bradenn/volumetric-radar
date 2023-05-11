@@ -1,6 +1,10 @@
-# Volumetric Radar
+# vRadar
 
-This project aims to provide an advanced and precise object detection system using multiple custom radar devices. By combining the data from multiple radars, it generates a volumetric representation of the environment, enabling accurate detection of objects in 3D space.
+### Volumetric Radar
+
+This project aims to provide an advanced and precise object detection system using multiple custom radar devices. By
+combining the data from multiple radars, it generates a volumetric representation of the environment, enabling accurate
+detection of objects in 3D space.
 
 The project is divided into the four following components:
 
@@ -27,15 +31,20 @@ The vRadar Mk4 is a k-band FMCW (Frequency-Modulated Continuous-Wave) MIMO (Mult
   - 2 MB PSRAM + 512 KB RAM
 - LSM6DSM Gyroscope & Accelerometer
 - External 2.4 Ghz Wi-Fi Antenna
-  - 150 Mbps @ 20m line of sight with moderate obstructions
+    - 150 Mbps @ 20m line of sight with moderate obstructions
 - Configurable audible chirp (can be used as an inordinately precise metronome)
 - 24 GHz FMCW Radar Module (RF Beam K-LC7)
-  - 24-24.25 GHz (&approx; 250 Mhz VCO Modulation Bandwidth)
-  - 1 transmitter, 2 receivers
+    - 24-24.25 GHz (&approx; 250 Mhz VCO Modulation Bandwidth)
+    - 1 transmitter, 2 receivers
 - MCP4922 12-bit DAC (used for Buzzer and VCO)
 - 4 x 73dB dual-stage amplifier
 
 ### Runtime Abstract
+
+```json
+
+
+```
 
 ### Communication
 

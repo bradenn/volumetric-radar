@@ -8,7 +8,6 @@
 #include <cstring>
 #include <esp_netif.h>
 #include <esp_event.h>
-#include "adc.h"
 #include "network.h"
 #include "persistent.h"
 #include "indicator.h"

@@ -12,22 +12,28 @@ static TaskHandle_t adcTaskHandle;
 static bool IRAM_ATTR adcConversionDone(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void
 *user_data) {
     BaseType_t mustYield = pdTRUE;
-    vTaskNotifyGiveFromISR(adcTaskHandle, &mustYield);
+    vTaskNotifyGiveFromISR(adcTaskHandle,&mustYield);
     portYIELD_FROM_ISR(mustYield);
     return (mustYield == pdFALSE);
 }
 
 esp_err_t Sample::listen(int64_t chirpDuration, uint16_t **out) {
-
-    adcTaskHandle = xTaskGetCurrentTaskHandle();
-    if (xSemaphoreTake(runtime, pdMS_TO_TICKS(1)) != pdTRUE) {
+    if (xSemaphoreTake(runtime, pdMS_TO_TICKS(0.5)) != pdTRUE) {
         printf("Sample semaphore cannot lock!\n");
         return ESP_ERR_TIMEOUT;
     }
 
+
     esp_err_t err;
+//    err = initializeContinuousAdc();
+//    if(err != ESP_OK) {
+//        return err;
+//    }
+    adcTaskHandle = xTaskGetCurrentTaskHandle();
+
     err = adc_continuous_start(adcContinuousHandle);
     if (err != ESP_OK) {
+//        destructContinuousAdc();
         xSemaphoreGive(runtime);
         return err;
     }
@@ -104,6 +110,7 @@ esp_err_t Sample::listen(int64_t chirpDuration, uint16_t **out) {
     }
     // Stop the ADC from listening and free DMA memory
     adc_continuous_stop(adcContinuousHandle);
+//    destructContinuousAdc();
     xSemaphoreGive(runtime);
     return ESP_OK;
 }
@@ -172,7 +179,7 @@ esp_err_t Sample::initializeContinuousAdc() {
     int channelMap[SAMPLE_CHANNEL_COUNT] = {CONFIG_vRADAR_I1, CONFIG_vRADAR_Q1, CONFIG_vRADAR_Q2, CONFIG_vRADAR_I2};
 
     adc_continuous_handle_cfg_t continuousHandleCfg = {
-            .max_store_buf_size = SAMPLE_CONVERSION_FRAME_SIZE * 2,
+            .max_store_buf_size = SAMPLE_CONVERSION_FRAME_SIZE*2,
             .conv_frame_size = SAMPLE_CONVERSION_FRAME_SIZE,
     };
 
@@ -200,7 +207,7 @@ esp_err_t Sample::initializeContinuousAdc() {
             continue;
         }
 
-        adcPatternConfig[i].atten = SAMPLE_ATTENUATION;
+        adcPatternConfig[i].atten = static_cast<adc_atten_t>(sampling.attenuation);
         adcPatternConfig[i].channel = channel;
         adcPatternConfig[i].unit = unit;
         adcPatternConfig[i].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
@@ -302,6 +309,12 @@ void sampleConfigTimerCallback(void *params) {
 
     bool runtimeChanged = false;
 
+    if(settings.getSystem().enabled == 0){
+        gpio_set_level(static_cast<gpio_num_t>(CONFIG_vRADAR_ENABLE), 0);
+    }else{
+        gpio_set_level(static_cast<gpio_num_t>(CONFIG_vRADAR_ENABLE), 1);
+    }
+
     if (sample->sampling.attenuation != sampling.attenuation) {
         runtimeChanged = true;
     }
@@ -344,7 +357,7 @@ esp_err_t Sample::initializeConfigurationTimer() {
         return err;
     }
     // Set the periodic timer to update every second
-    err = esp_timer_start_periodic(configTimer, 1000 * 1000);
+    err = esp_timer_start_periodic(configTimer, 1000 * 1125);
     if (err != ESP_OK) {
         return err;
     }

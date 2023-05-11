@@ -10,6 +10,8 @@
 #include <iomanip>
 #include <hal/gpio_types.h>
 #include <driver/temperature_sensor.h>
+#include <driver/gptimer.h>
+#include <esp_adc/adc_oneshot.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/ringbuf.h"
@@ -26,7 +28,6 @@ static RingbufHandle_t gyro_buffer{};
 
 
 static char *generateMetadata() {
-    auto srv = &Settings::instance();
 
     // Initialize a json object
     auto obj = cJSON_CreateObject();
@@ -41,30 +42,36 @@ static char *generateMetadata() {
     snprintf((char *) macAddr, 18, "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     // Add generated variables to the object
     cJSON_AddStringToObject(obj, "name", name);
+    cJSON_AddStringToObject(obj, "mac", macAddr);
     // Add compiled config metadata to the object
-    const int sampleRate = 80000;
     cJSON_AddNumberToObject(obj, "base", CONFIG_vRADAR_BASE_FREQUENCY);
     cJSON_AddNumberToObject(obj, "xFov", CONFIG_vRADAR_FOV_X);
     cJSON_AddNumberToObject(obj, "yFov", CONFIG_vRADAR_FOV_Y);
     // Generate the ADC parameters
     auto adc = cJSON_CreateObject();
-    cJSON_AddNumberToObject(adc, "window", BUFFER_SIZE);
-    cJSON_AddNumberToObject(adc, "bits", ADC_BIT_WIDTH);
     auto settings = Settings::instance();
-    auto sampling = settings.getSampling();
-    cJSON_AddNumberToObject(adc, "samples", sampling.samples);
-    cJSON_AddNumberToObject(adc, "frequency", sampling.frequency);
-    cJSON_AddNumberToObject(adc, "prf", sampling.prf);
-    cJSON_AddNumberToObject(adc, "pulse", sampling.pulse);
 
     auto system = settings.getSystem();
-    cJSON_AddNumberToObject(adc, "enabled", system.enabled);
-    cJSON_AddNumberToObject(adc, "audible", system.audible);
-    cJSON_AddNumberToObject(adc, "chirp", system.chirp);
-    cJSON_AddNumberToObject(adc, "gyro", system.gyro);
+    cJSON_AddNumberToObject(obj, "enabled", system.enabled);
+    cJSON_AddNumberToObject(obj, "audible", system.audible);
+    cJSON_AddNumberToObject(obj, "gyro", system.gyro);
 
-    // Add the adc object to the root objects
-    cJSON_AddItemToObject(obj, "adc", adc);
+    cJSON *chirpObj = cJSON_CreateObject();
+    cJSON_AddNumberToObject(chirpObj, "prf", system.chirp.prf);
+    cJSON_AddNumberToObject(chirpObj, "duration", system.chirp.duration);
+    cJSON_AddNumberToObject(chirpObj, "steps", system.chirp.steps);
+    cJSON_AddNumberToObject(chirpObj, "padding", system.chirp.padding);
+    cJSON_AddNumberToObject(chirpObj, "resolution", system.chirp.resolution);
+
+    cJSON *samplingObj = cJSON_CreateObject();
+    cJSON_AddNumberToObject(samplingObj, "frequency", system.sampling.frequency);
+    cJSON_AddNumberToObject(samplingObj, "samples", system.sampling.samples);
+    cJSON_AddNumberToObject(samplingObj, "attenuation", system.sampling.attenuation);
+    cJSON_AddNumberToObject(obj, "updated", (double) esp_timer_get_time());
+
+    cJSON_AddItemToObject(obj, "sampling", samplingObj);
+    cJSON_AddItemToObject(obj, "chirp", chirpObj);
+
     // Marshal the object to json as a string
     char *out = cJSON_PrintUnformatted(obj);
     // Free the memory used to create the object
@@ -106,11 +113,15 @@ static esp_err_t systemConfigHandler(httpd_req_t *req) {
     s->systemFromJson(buf);
     s->push();
 
+    auto md = generateMetadata();
 
-    httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+
+    httpd_resp_send(req, md, HTTPD_RESP_USE_STRLEN);
     // Send the status OK message
     httpd_resp_set_status(req, HTTPD_200);
     // Return without error
+
+    free(md);
 
     return ESP_OK;
 }
@@ -449,14 +460,22 @@ void watcher(void *arg) {
 static int64_t last = 0;
 static int64_t loop = 0;
 
+
 void adcTask(void *arg) {
-    auto s = new Sample(adc_buffer);
+    auto s = new Sample();
 
     new DAC(xTaskGetCurrentTaskHandle());
     last = esp_timer_get_time();
     int samples = 256;
     while (true) {
+        auto settings = Settings::instance();
+        auto chirp = settings.getSystem().chirp;
 
+        samples = (int) ceil(((double) chirp.prf / 1000.0) / (double) (1000.0 / settings.getSystem().sampling
+                .frequency));
+//        printf("Capturing: %d\n", samples);
+        if (samples < 32) samples = 32;
+        if (samples > 1024) samples = 1024;
 
 //        auto itemSize = xRingbufferGetMaxItemSize(adc_buffer);
 //        auto freeSize = xRingbufferGetCurFreeSize(adc_buffer);
@@ -520,7 +539,7 @@ void adcTask(void *arg) {
         };
 
 
-        if (xRingbufferSend(adc_buffer, (void *) &sd, sizeof(sd), 0) != pdTRUE) {
+        if (xRingbufferSend(adc_buffer, (void *) &sd, sizeof(sd), pdMS_TO_TICKS(0.5)) != pdTRUE) {
             printf("Overflow :< \n");
             for (int i = 0; i < 4; ++i) {
                 if (data[i] != nullptr) heap_caps_free(data[i]);
@@ -588,7 +607,7 @@ Server::Server() {
         printf("Failed to create ring buffer\n");
     }
 
-    gyro_buffer = xRingbufferCreate(sizeof(GyroData) * 10, RINGBUF_TYPE_NOSPLIT);
+    gyro_buffer = xRingbufferCreate(sizeof(GyroData) * 20, RINGBUF_TYPE_NOSPLIT);
     if (gyro_buffer == nullptr) {
         printf("Failed to create ring buffer\n");
     }
@@ -597,12 +616,10 @@ Server::Server() {
 
     new Gyro(gyro_buffer);
 
-
-//    new Controller(adc, s->sampling.prf, s->sampling.pulse);
     TaskHandle_t adcTaskHandle{};
     xTaskCreatePinnedToCore(watcher, "watcherTask", 8192, nullptr, tskIDLE_PRIORITY + 5, nullptr, 1);
     xTaskCreate(gyroWatcher, "gyroWatcher", 8192, nullptr, tskIDLE_PRIORITY + 3, nullptr);
-    xTaskCreatePinnedToCore(adcTask, "adcTask", 8192, nullptr, tskIDLE_PRIORITY + 4, &adcTaskHandle, 0);
+    xTaskCreatePinnedToCore(adcTask, "adcTask", 8192, nullptr, tskIDLE_PRIORITY + 6, &adcTaskHandle, 0);
 
 //    xTaskCreate(dacTask, "dacTask", 24000, &adcTaskHandle, tskIDLE_PRIORITY + 3, nullptr);
 
