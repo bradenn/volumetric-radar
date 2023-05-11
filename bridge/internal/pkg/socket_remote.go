@@ -3,13 +3,17 @@ package pkg
 import (
 	"bridge/internal/infrastructure/log"
 	"bridge/internal/pkg/dsp"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/go-chi/chi"
+	"github.com/go-chi/cors"
 	"github.com/gorilla/websocket"
-	"github.com/mjibson/go-dsp/fft"
-	"gonum.org/v1/gonum/dsp/window"
+	"gonum.org/v1/gonum/dsp/fourier"
+	"io"
 	"math"
 	"math/cmplx"
+	"net/http"
 	"sort"
 	"sync"
 	"time"
@@ -35,8 +39,10 @@ type Metadata struct {
 	Base      int64    `json:"base"`
 	XFov      int      `json:"xFov"`
 	YFov      int      `json:"yFov"`
-	Enabled   int      `json:"enabled"`
+	Enabled   int      `json:"enable"`
 	Audible   int      `json:"audible"`
+	Rate      float64  `json:"rate"`
+	Duration  float64  `json:"duration"`
 	Gyro      int      `json:"gyro"`
 	Connected bool     `json:"connected"`
 	Sampling  Sampling `json:"sampling"`
@@ -62,7 +68,7 @@ type UnitData struct {
 }
 
 const (
-	FrameDigest = 25000
+	FrameDigest = 12500
 	FrameRender = 33333
 )
 
@@ -87,12 +93,14 @@ type Unit struct {
 	Metadata    Metadata  `json:"metadata"`
 	Phase       []float64 `json:"phase"`
 	Distance    []float64 `json:"distance"`
+	Duration    float64   `json:"duration"`
 	Rate        float64   `json:"rate"`
+	Samples     float64   `json:"samples"`
 	lastChange  bool
 }
 
 const BufferSize = 1
-const IncomingSize = 256 * 16
+const IncomingSize = 16 * 512
 
 type RemoteUnit struct {
 	Unit Unit
@@ -102,6 +110,7 @@ type RemoteUnit struct {
 
 	buffer   map[int][]complex128
 	velocity map[int][]float64
+	spec     map[int][][]complex128
 
 	dsp map[int][]float64
 
@@ -111,9 +120,12 @@ type RemoteUnit struct {
 	outbound   chan []byte
 	done       chan bool
 
-	total int
-	start time.Time
-	rate  float64
+	total    int
+	start    time.Time
+	duration float64
+	rate     float64
+
+	threshold []float64
 
 	address   string
 	timerStop chan bool
@@ -195,44 +207,68 @@ func MatchedFilter(signal, chirpFilter []complex128) []complex128 {
 
 	return result
 }
-func complexConjugateMultiplication(a, b []complex128) []complex128 {
-	result := make([]complex128, len(a))
-	for i := range a {
-		result[i] = a[i] * cmplx.Conj(b[i])
+
+func extractChirpDistances(data []complex128, sampleRate float64, sweepBandwidth float64, sweepTime float64, speedOfLight float64) []float64 {
+	// Number of samples per chirp
+	samplesPerChirp := int(sweepTime * sampleRate)
+
+	// Number of chirps in the data
+	numChirps := len(data) / samplesPerChirp
+
+	// Prepare FFT
+	fft := fourier.NewCmplxFFT(samplesPerChirp)
+
+	distances := make([]float64, numChirps)
+
+	for i := 0; i < numChirps; i++ {
+		chirpData := data[i*samplesPerChirp : (i+1)*samplesPerChirp]
+
+		// Perform FFT on the dechirped signal
+		fftData := fft.Coefficients(nil, chirpData)
+
+		// Find the index with the highest amplitude
+		peakIndex := 0
+		peakAmplitude := 0.0
+
+		for j := 1; j < len(fftData)/2; j++ {
+			amplitude := cmplx.Abs(fftData[j])
+			if amplitude > peakAmplitude {
+				peakIndex = j
+				peakAmplitude = amplitude
+			}
+		}
+
+		// Calculate the distance from the peak frequency
+		peakFrequency := float64(peakIndex) * sampleRate / float64(samplesPerChirp)
+		distance := (speedOfLight * sweepTime * peakFrequency) / (2 * sweepBandwidth)
+		distances[i] = distance
 	}
-	return result
-}
-func FindBeatFrequency(iqData []complex128, sampleRate float64) float64 {
-	// Apply a windowing function (Hanning window) to the I/Q data
-	windowedData := window.BlackmanHarrisComplex(iqData)
 
-	// Perform the FFT on the windowed I/Q data
-	fftResult := fft.FFT(windowedData)
-
-	findPeakIndex(fftResult)
-	// Calculate the beat frequency based on the index of the highest peak
-	beatFrequency := float64(findPeakIndex(fftResult)) * sampleRate / float64(len(iqData))
-
-	return beatFrequency
+	return distances
 }
 
-func applyHanningWindow(data []complex128) []complex128 {
-	windowedData := make([]complex128, len(data))
-	N := len(data)
-
-	for n := range data {
-		window := 0.5 * (1 - math.Cos(2*math.Pi*float64(n)/float64(N-1)))
-		windowedData[n] = complex(real(data[n])*window, imag(data[n])*window)
-	}
-
-	return windowedData
+//func detectChirpPeaks(data []complex128, threshold float64) []int {
+//	peakIndices := []int{}
+//	for i := 1; i < len(data)-1; i++ {
+//		amplitude := cmplx.Abs(data[i])
+//		if amplitude > threshold && amplitude > cmplx.Abs(data[i-1]) && amplitude >= cmplx.Abs(data[i+1]) {
+//			peakIndices = append(peakIndices, i)
+//		}
+//	}
+//	return peakIndices
+//}
+//
+func estimateDistance(data []complex128, peakIndex int, sampleRate float64, sweepBandwidth float64, sweepTime float64, speedOfLight float64) float64 {
+	frequency := float64(peakIndex) * sampleRate / float64(len(data))
+	distance := (speedOfLight * sweepTime * frequency) / (2 * sweepBandwidth)
+	return distance
 }
 
 func CalculateDistance(beatFrequency float64) float64 {
 	// Chirp parameters
-	bandwidth := 6.1e6     // 200 MHz
-	chirpDuration := 25e-3 // 12.5 ms
-	speedOfLight := 3e8    // 300,000,000 m/s
+	bandwidth := 50000000.0  // 200 MHz
+	chirpDuration := 12.5e-3 // 12.5 ms
+	speedOfLight := 3e8      // 300,000,000 m/s
 
 	// Calculate slope
 	slope := 2 * bandwidth / chirpDuration
@@ -264,8 +300,9 @@ func CalculateFrequency(index int, sampleRate int, fftSize int) float64 {
 	return float64(index) * float64(sampleRate) / float64(fftSize)
 }
 
-func findPeaks(fftResult []complex128, windowSize int) []int {
-	peaks := []int{}
+func findPeaks(fftResult []complex128, windowSize int) ([]float64, []float64) {
+	peaks := []float64{}
+	freqs := []float64{}
 	n := len(fftResult)
 
 	for i := windowSize; i < n-windowSize; i++ {
@@ -285,11 +322,13 @@ func findPeaks(fftResult []complex128, windowSize int) []int {
 		}
 
 		if isPeak {
-			peaks = append(peaks, i)
+			peaks = append(peaks, float64(i))
+			freqs = append(freqs, CalculateFrequency(i, 20480, len(fftResult)))
+
 		}
 	}
 
-	return peaks
+	return peaks, freqs
 }
 
 func removeDCOffset(signal []complex128) []complex128 {
@@ -304,6 +343,30 @@ func removeDCOffset(signal []complex128) []complex128 {
 		result[i] = val - mean
 	}
 	return result
+}
+func applyWindow(samples []complex128, winFunc func(int) []float64) {
+	n := len(samples)
+	w := winFunc(n)
+	for i := 0; i < n; i++ {
+		samples[i] *= complex(w[i], 0)
+	}
+}
+func detectChirpStartTimes(data []complex128, threshold float64) []int {
+	startTimes := []int{}
+	previousAmplitude := cmplx.Abs(data[0])
+
+	for i := 1; i < len(data); i++ {
+		currentAmplitude := cmplx.Abs(data[i])
+		derivative := currentAmplitude - previousAmplitude
+
+		if derivative > threshold {
+			startTimes = append(startTimes, i)
+		}
+
+		previousAmplitude = currentAmplitude
+	}
+
+	return startTimes
 }
 func GenerateFMCWSignalShape(duration float64, sampleRate float64) []complex128 {
 	numSamples := int(math.Round(duration * sampleRate))
@@ -328,110 +391,20 @@ func GenerateFMCWSignalShape(duration float64, sampleRate float64) []complex128 
 
 	return signal
 }
-func MedianFilter(signal []complex128, windowSize int) []complex128 {
-	n := len(signal)
-	filteredSignal := make([]complex128, n)
-	padding := windowSize / 2
 
-	for i := 0; i < n; i++ {
-		start := i - padding
-		if start < 0 {
-			start = 0
-		}
-
-		end := i + padding
-		if end > n {
-			end = n
-		}
-
-		window := make([]complex128, end-start)
-		copy(window, signal[start:end])
-
-		// Sort the window samples based on their magnitudes
-		sort.Slice(window, func(a, b int) bool {
-			return cmplx.Abs(window[a]) < cmplx.Abs(window[b])
-		})
-
-		// Replace the current sample with the median value
-		filteredSignal[i] = window[len(window)/2]
-	}
-
-	return filteredSignal
-}
-
-func GenerateFMCWSignal(duration float64, bandwidth, sampleRate float64) []complex128 {
-	numSamples := int(math.Round(duration * sampleRate))
-	signal := make([]complex128, numSamples)
-
-	halfDuration := duration / 2.0
-	chirpRate := bandwidth / halfDuration
-
-	for i := 0; i < numSamples; i++ {
-		t := float64(i) / sampleRate
-		tInChirp := math.Mod(t, halfDuration)
-
-		// Calculate frequency based on triangle waveform.
-		var frequency float64
-		if tInChirp < halfDuration/2 {
-			frequency = chirpRate * tInChirp
-		} else {
-			frequency = bandwidth - chirpRate*(tInChirp-halfDuration/2)
-		}
-
-		phase := 2.0 * math.Pi * frequency * t
-		signal[i] = cmplx.Rect(1.0, phase)
-	}
-
-	return signal
-}
 func (r *RemoteUnit) digest() {
 	r.index = (r.index + 1) % BufferSize
+	// Skip rendering if the frame buffer size has not been met
 	r.mutex.Lock()
 	if len(r.buffer[0]) < BufferSize*IncomingSize || len(r.buffer[1]) < BufferSize*IncomingSize {
-
 		r.mutex.Unlock()
-
 		return
 	}
-
+	// Copy the active buffer to the frame buffer
 	cmp1 := r.buffer[0]
-	//h1 := cmp1
 	cmp2 := r.buffer[1]
-	//h2 := cmp2
 	r.mutex.Unlock()
-
-	// 10000 samples/sec
-	// 38ms chirp
-	// 10 samples/ms
-	// 380 samples/chirp (384)
-
-	// 1000 dac vals / s
 	//
-	//val := 0.0
-	//filter := []float64{}
-	//
-	////37.23636364*16.384
-	//
-	////4096/64 = 128 points/chirp (64ms)
-	//// 256 samples/chirp
-	//
-	//dacRate := 1.0                      // 500us/update
-	//sampleRate := 128.0 * 128.0         // 16384 samples/s
-	//samplesPerMs := sampleRate / 1000.0 // 16.384 samples/ms
-	//
-	//dacStep := 64.0                     // 64 levels per step
-	//dacResolution := 4096.0             // steps per chirp
-	//dacSteps := dacResolution / dacStep // Number of levels per chirp
-	////samplesPerStep := samplesPerMs * dacRate
-	//
-	//dacDurationMs := dacSteps * dacRate             // Duration of a chirp
-	//samplesPerChirp := dacDurationMs * samplesPerMs // samples taken per chirp
-	///*	val := 0.0
-	//	dx := 1.0 / dacSteps*/
-	//for i := 0.0; i < samplesPerChirp; i++ {
-	//	filter = append(filter, (samplesPerChirp-i)*(1/samplesPerChirp))
-	//}
-
 	unit := Unit{
 		Channels:    make([]Channel, 2),
 		Metadata:    r.Unit.Metadata,
@@ -439,69 +412,119 @@ func (r *RemoteUnit) digest() {
 		Tilt:        r.Unit.Tilt,
 		Temperature: r.Unit.Temperature,
 		Rssi:        r.Unit.Rssi,
+		Samples:     float64(len(cmp1)),
 	}
-	//unit.Channels[0].SignalI = []float64{}
-	//unit.Channels[0].SignalQ = []float64{}
-	//
+
 	//ff := fourier.NewCmplxFFT(len(cmp1))
 	//cmp1 = ff.Coefficients(nil, cmp1)
 	//cmp2 = ff.Coefficients(nil, cmp2)
 	//cmp1 = window.BlackmanHarrisComplex(cmp1)
 	//cmp2 = window.BlackmanHarrisComplex(cmp2)
-	////
+
 	//cmp1 = ff.Sequence(nil, cmp1)
 	//cmp1 = ff.Sequence(nil, cmp2)
-	//txSignal := linearChirp(24e9, 25.0e-3, 6.86645508e6, 256)
+
 	//
-	// 125/4096
-	//chirp := GenerateChirp(0, 6.103516e6, 12.5e-3, 1024*20)
-	//chirp = undersample(chirp, 10)
+	//cmp1 = movingAverageFilter(cmp1, 1)
+	//cmp2 = movingAverageFilter(cmp2, 1)
+	//filter := []complex128{complex(0, 0), complex(1, 1), complex(2, 2), complex(3, 3), complex(0, 0)}
+	//////
+	////////
+	//////w := 24
+	//////cmp1 = MedianFilter(cmp1, w)
+	//////cmp2 = MedianFilter(cmp2, w)
+	//////
+	////
+	////filter := GenerateFMCWSignal(12.5e-3, 6.10351562e6, 20480)
+	//cmp1 = MatchedFilter(cmp1, filter)
+	//cmp2 = MatchedFilter(cmp2, filter)
+	//cmp1 = movingAverageFilter(cmp1, 1)
+	//cmp2 = movingAverageFilter(cmp2, 1)
+
+	//bf := FindBeatFrequency(cmp1, float64(unit.Metadata.Sampling.Frequency))
+	//fmt.Println(bf)
+	//fmt.Println()
+	//ff := fourier.NewCmplxFFT(len(cmp1))
+	//unit.Channels[0].Spectrum = []float64{}
+	//cmp1 = ff.Coefficients(nil, cmp1)
+	//for _, c := range cmp1 {
+	//	unit.Channels[0].Spectrum = append(unit.Channels[0].Spectrum, math.Log10(cmplx.Abs(c))*10)
+	//}
+	//////idx, fr := findPeaks(cmp1, 2)
+	//////unit.Channels[0].Peaks = idx
+	//////unit.Channels[0].Frequencies = fr
+	//cmp2 = ff.Coefficients(nil, cmp2)
+	//unit.Channels[1].Spectrum = []float64{}
+	//for _, c := range cmp2 {
+	//	unit.Channels[1].Spectrum = append(unit.Channels[1].Spectrum, math.Log10(cmplx.Abs(c))*10)
+	//}
 	cmp1 = removeDCOffset(cmp1)
 	cmp2 = removeDCOffset(cmp2)
-	//
-	var filter []complex128
-	div := 100.0
-	for i := 0; i < 405; i++ {
-		m := div / 2.0
-		v := m - math.Abs(m-float64(i))
-		v2 := m - math.Abs(m-(math.Mod(float64(i)-div/2, div)))
-		filter = append(filter, complex(v, v2))
+	//bw := ((float64(r.Unit.Metadata.Chirp.Resolution) / 4096) * 2.5) * 80e6
+
+	//fmt.Println(dst, dst2)
+	//cmp1 = dsp.RemoveDCOffset(cmp1, complex(1855, 1855))
+	//cmp2 = dsp.RemoveDCOffset(cmp2, complex(1855, 1855))
+	//fmt.Println(rangeFromBeatFrequency(cmp1, cmp2, float64(unit.Metadata.Chirp.Duration), 3e8, 1e6))
+	bw := ((float64(unit.Metadata.Chirp.Resolution) / 4096) * 2.5) * 80e6
+	duration := float64(unit.Metadata.Chirp.Prf)
+	if unit.Metadata.Chirp.Padding > 0 {
+		duration /= float64(unit.Metadata.Chirp.Steps) / float64(unit.Metadata.Chirp.Padding)
 	}
-	//
-	//// ((500/4096)*2.5)*80
-	//w := 24
-	//cmp1 = MedianFilter(cmp1, w)
-	//cmp2 = MedianFilter(cmp2, w)
-	//
 
-	//filter := GenerateFMCWSignal(12.5e-3, 6.10351562e6, 20480)
-	cmp1 = MatchedFilter(cmp1, filter)
-	cmp2 = MatchedFilter(cmp2, filter)
-
-	phaseDiff := phaseDifference(cmp1, cmp2)
+	filter := generateFMCWSawtooth(duration/1000.0/1000.0, float64(unit.Metadata.Sampling.Frequency), bw, 24e9)
+	cmp1 = matchedFilterComplex(cmp1, filter)
+	cmp2 = matchedFilterComplex(cmp2, filter)
+	////cmp1 = filter
+	//cmp1 = filter
+	//ds := []float64{}
+	phaseDiff, _ := phaseDifference(cmp1, cmp2)
+	//peakIndices := detectChirpStartTimes(cmp1, 250)
+	//fmt.Println(peakIndices)
+	//
+	//for _, peakIndex := range peakIndices {
+	//	//fmt.Printf("Chirp peak at index %d\n", peakIndex)
+	//	distance := estimateDistance(cmp1, peakIndex, 20480, 97.656e6, 12.5e-3, 2.99e8)
+	//	ds = append(ds, distance)
+	//	fmt.Printf("  Estimated distance (sweep bandwidth = %.1e Hz): %.2f meters\n", 1e9, distance)
+	//}
+	//fmt.Println(ds)
 	//aoa := angleOfApproach(phaseDiff, 0.01245606, 8.763)
 
 	degrees := 81.0
-	subdegrees := 16.0
+	subdegrees := 3.0
 	totalDeg := degrees * subdegrees
 	bins := make([]float64, int(math.Floor(totalDeg)))
+	//ds := make([]float64, int(math.Floor(totalDeg)))
 
+	//
+	//r.velocity[0] = append(r.velocity[0], (dst+dst2)/2)
+	//r.velocity[1] = append(r.velocity[1], dst2)
+	//samples := 250
+	//if len(r.velocity[0]) > samples {
+	//	r.velocity[0] = r.velocity[0][(len(r.velocity[0]) - samples):]
+	//	r.velocity[1] = r.velocity[1][(len(r.velocity[1]) - samples):]
+	//}
 	for _, f := range phaseDiff {
 		if f >= -40 && f <= 40 {
 			f *= subdegrees
 			idx := int(math.Floor(f) + (totalDeg / 2.0))
 			bins[idx]++
+			//ds[idx]++
 		}
 
 	}
+	//
+	unit.Phase = movingAverageFilterFloat(bins, 10)
+	//unit.Distance = ds
 
-	bins = movingAverageFilterFloat(bins, 20)
-	unit.Phase = bins
+	//c1 := fft.FFT2(r.spec[0])
+	//c2 := fft.FFT2(r.spec[1])
 
-	unit.Distance = make([]float64, len(bins))
 	for _, c := range cmp1 {
 		unit.Channels[0].SignalI = append(unit.Channels[0].SignalI, real(c))
 		unit.Channels[0].SignalQ = append(unit.Channels[0].SignalQ, imag(c))
+
 	}
 	//fmt.Println(findPeaks(cmp1, 20))
 	//unit.Channels[0].SignalI = bandpassFilter(unit.Channels[0].SignalI, 100, 10000, 20*1024, 4)
@@ -523,7 +546,7 @@ func (r *RemoteUnit) digest() {
 	//if dx != 0 {
 	//	fmt.Println(CalculateDistance(pf1), CalculateDistance(pf2))
 	//}
-	//ff := fourier.NewCmplxFFT(len(cmp1))
+
 	////cmp1_c = hanningWindow(cmp1_c)
 	////peak := findPeakIndex(cmp1_c)
 	////dist := calculateDistance(peak, 25e-3, 250e6, 299792458)
@@ -534,10 +557,17 @@ func (r *RemoteUnit) digest() {
 	////fmt.Println(freqs[peak])
 	////fmt.Println(dist)
 	//
+	//freqs := HighestProbFrequencies(cmp1, 20480, len(cmp1), 40)
 	//cmp1 = ff.Coefficients(nil, cmp1)
-	//for _, c := range cmp1[0 : len(cmp1)/2] {
-	//	unit.Channels[0].Spectrum = append(unit.Channels[0].Spectrum, cmplx.Abs(c))
+	//dst := FindBeatFrequency(cmp1, float64(r.Unit.Metadata.Sampling.Frequency))
+	//for _, freq := range freqs {
+	//	fmt.Println(CalculateVelocity(freq, dst, bw))
 	//}
+	//
+
+	//idx, fr = findPeaks(cmp2, 2)
+	//unit.Channels[1].Peaks = idx
+	//unit.Channels[1].Frequencies = fr
 	//
 	//cmp2 = ff.Coefficients(nil, cmp2)
 	//for _, c := range cmp2[0 : len(cmp2)/2] {
@@ -546,55 +576,105 @@ func (r *RemoteUnit) digest() {
 
 	//p
 
-	unit.Rate = r.rate
+	unit.Metadata.Duration = r.duration
+	unit.Metadata.Rate = r.rate
 	//
 	unit.Channels[0].SignalI = dsp.DownSample(unit.Channels[0].SignalI, 1024)
 	unit.Channels[0].SignalQ = dsp.DownSample(unit.Channels[0].SignalQ, 1024)
-	//unit.Channels[0].Spectrum = downsample(unit.Channels[0].Spectrum[0:len(unit.Channels[0].Spectrum)/2], 1024)
+	//unit.Channels[0].Spectrum = dsp.DownSample(unit.Channels[0].Spectrum, 1024)
 	unit.Channels[1].SignalI = dsp.DownSample(unit.Channels[1].SignalI, 1024)
 	unit.Channels[1].SignalQ = dsp.DownSample(unit.Channels[1].SignalQ, 1024)
-	//unit.Channels[1].Spectrum = downsample(unit.Channels[1].Spectrum[0:len(unit.Channels[0].Spectrum)/2], 1024)
-
-	r.mutex.Lock()
-	//r.buffer[0] = []complex128{}
-	//r.buffer[1] = []complex128{}
-	r.mutex.Unlock()
+	//unit.Channels[1].Spectrum = dsp.DownSample(unit.Channels[1].Spectrum, 1024)
 
 	r.display.Lock()
-	//unit.lastChange = false
+	unit.lastChange = false
 	r.Unit = unit
 	r.display.Unlock()
 
 }
 func normalizePhaseDifference(phase float64) float64 {
-	for phase > math.Pi {
-		phase -= 2 * math.Pi
+	for phase >= math.Pi {
+		phase -= math.Pi
 	}
 	for phase < -math.Pi {
-		phase += 2 * math.Pi
+		phase += math.Pi
 	}
 	return phase
 }
 
-func phaseDifference(cmp1 []complex128, cmp2 []complex128) []float64 {
+// FindMaxIndices finds the indices of the highest n values in the input array.
+func FindMaxIndices(data []float64, n int) []int {
+	type kv struct {
+		Index int
+		Value float64
+	}
+
+	var highestValues []kv
+	for i, v := range data {
+		if len(highestValues) < n {
+			highestValues = append(highestValues, kv{i, v})
+			sort.SliceStable(highestValues, func(i, j int) bool {
+				return highestValues[i].Value > highestValues[j].Value
+			})
+		} else if v > highestValues[n-1].Value {
+			highestValues[n-1] = kv{i, v}
+			sort.SliceStable(highestValues, func(i, j int) bool {
+				return highestValues[i].Value > highestValues[j].Value
+			})
+		}
+	}
+
+	indices := make([]int, n)
+	for i, v := range highestValues {
+		indices[i] = v.Index
+	}
+
+	return indices
+}
+
+// HighestProbFrequencies takes a complex FFT result and returns an array of the
+// highest probability frequencies' indices in that FFT.
+func HighestProbFrequencies(fft []complex128, sampleRate, numSamples, n int) []float64 {
+	magnitudes := make([]float64, len(fft))
+
+	for i, v := range fft {
+		magnitudes[i] = cmplx.Abs(v)
+	}
+
+	maxIndices := FindMaxIndices(magnitudes, n)
+
+	frequencies := make([]float64, n)
+	for i, index := range maxIndices {
+		frequencies[i] = float64(index*sampleRate) / float64(numSamples)
+	}
+
+	return frequencies
+}
+
+func phaseDifference(cmp1 []complex128, cmp2 []complex128) ([]float64, []float64) {
 	var p []float64
+	var d []float64
+
 	for i := 0; i < len(cmp1); i++ {
 		p1 := cmp1[i]
 		p2 := cmp2[i]
 		phase1 := cmplx.Phase(p1)
 		phase2 := cmplx.Phase(p2)
+		//if phase1-phase2 > math.Pi || phase1-phase2 < -math.Pi {
+		//	continue
+		//}
+		// Perform the FFT on the windowed I/Q data
 
-		dx := phase1 - phase2
-		if dx > math.Pi || dx < -math.Pi {
-			continue
-		}
+		// Calculate the beat frequency based on the index of the highest peak
+		dx := normalizePhaseDifference(phase1 - phase2)
 		difference := math.Asin(0.2257 * dx)
 		if !math.IsNaN(difference) {
 			p = append(p, difference*(180.0/math.Pi))
+			//d = append(d, math.Max(0, 0))
 		}
 	}
 
-	return p
+	return p, d
 }
 
 func (r *RemoteUnit) tick() {
@@ -664,6 +744,86 @@ func movingAverageFilter(data []complex128, windowSize int) []complex128 {
 	return filteredData
 }
 
+func generateFMCWSawtooth(duration float64, sampleRate float64, bandwidth float64, initialFrequency float64) []complex128 {
+	numSamples := int(duration * sampleRate)
+	sawtooth := make([]complex128, numSamples)
+
+	slope := bandwidth / duration
+
+	for i := 0; i < numSamples; i++ {
+		tt := float64(i) / sampleRate
+
+		// Generate the FMCW signal with the sawtooth waveform for the frequency modulation
+		modulatedFrequency := initialFrequency + (slope*tt-math.Floor(slope*tt))*bandwidth
+
+		// Compute the phase of the FMCW signal at the current time
+		phase := 2.0 * math.Pi * modulatedFrequency * tt
+
+		// Generate the complex FMCW signal with cosine and sine functions for real and imaginary parts, respectively
+		sawtooth[i] = complex(math.Cos(phase), math.Sin(phase))
+	}
+
+	return sawtooth
+}
+func rms(values []complex128) float64 {
+	sum := 0.0
+	for _, value := range values {
+		sum += math.Pow(cmplx.Abs(value), 2)
+	}
+	return math.Sqrt(sum / float64(len(values)))
+}
+
+func normalize(values []complex128) []complex128 {
+	normalized := make([]complex128, len(values))
+	rmsValue := rms(values)
+	for i, value := range values {
+		normalized[i] = value / complex(rmsValue, 0)
+	}
+	return normalized
+}
+
+func matchedFilterComplex(signal, filter []complex128) []complex128 {
+	n := len(signal)
+	m := len(filter)
+
+	if m > n {
+		return nil
+	}
+
+	normalizedSignal := normalize(signal)
+	normalizedFilter := normalize(filter)
+
+	output := make([]complex128, n-m+1)
+
+	for i := 0; i <= n-m; i++ {
+		sum := complex(0, 0)
+		for j := 0; j < m; j++ {
+			sum += normalizedSignal[i+j] * cmplx.Conj(normalizedFilter[m-1-j])
+		}
+		output[i] = sum
+	}
+
+	return output
+}
+func lowPassFilter(data []float64, cutoffFreq, sampleRate float64) []float64 {
+	RC := 1.0 / (2 * math.Pi * cutoffFreq)
+	dt := 1.0 / sampleRate
+	alpha := dt / (RC + dt)
+
+	filteredData := make([]float64, len(data))
+	filteredData[0] = data[0]
+
+	for i := 1; i < len(data); i++ {
+		filteredData[i] = alpha*data[i] + (1-alpha)*filteredData[i-1]
+	}
+
+	return filteredData
+}
+func CalculateVelocity(freqDiff, sweepFreq, sweepBandwidth float64) float64 {
+	velocity := (3e8 * freqDiff) / (2 * sweepFreq * sweepBandwidth)
+	return velocity
+}
+
 func (r *RemoteUnit) process(data []byte) {
 
 	incoming := decodeBinaryToFloat64Arrays(data, ((len(data)-16)/4)/2)
@@ -693,7 +853,7 @@ func (r *RemoteUnit) process(data []byte) {
 		}
 		//fmt.Printf("%d, ", value1)
 	}
-	r.rate = float64(1000 / ((adcStop - adcStart) / 1000))
+	r.duration = float64(adcStop - adcStart)
 	//fmt.Printf("ADC: %dµs Chirp: %dµs\n", adcStop-adcStart, chirtpStop-chirpStart)
 	//value1, err := extractInt64FromBytes(data, (len(data)-1)-15, (len(data)-1)-8)
 	//if err != nil {
@@ -705,7 +865,7 @@ func (r *RemoteUnit) process(data []byte) {
 	//}
 	//fmt.Println(int64(value2) - int64(value1))
 
-	r.total += len(incoming[0])
+	r.total += 1
 
 	if time.Since(r.start).Seconds() >= 1 {
 		r.rate = float64(r.total) / time.Since(r.start).Seconds()
@@ -727,13 +887,19 @@ func (r *RemoteUnit) process(data []byte) {
 		cmp1 = append(cmp1, complex(incoming[0][i], incoming[1][i]))
 		cmp2 = append(cmp2, complex(incoming[3][i], incoming[2][i]))
 	}
-	//cmp1 = dsp.RemoveDCOffset(cmp1, complex(1250, 1250))
-	//cmp2 = dsp.RemoveDCOffset(cmp2, complex(1250, 1250))
 
 	//
 
 	r.mutex.Lock()
-
+	r.spec[0] = append(r.spec[0], cmp1)
+	numChirps := 8
+	if len(r.spec[0]) > numChirps {
+		r.spec[0] = r.spec[0][len(r.spec[0])-numChirps:]
+	}
+	r.spec[1] = append(r.spec[1], cmp2)
+	if len(r.spec[1]) > numChirps {
+		r.spec[1] = r.spec[1][len(r.spec[1])-numChirps:]
+	}
 	r.buffer[0] = append(r.buffer[0], cmp1...)
 	r.buffer[1] = append(r.buffer[1], cmp2...)
 
@@ -747,7 +913,26 @@ func (r *RemoteUnit) process(data []byte) {
 
 	r.mutex.Unlock()
 }
+func matchedFilter(signal, filter []float64) []float64 {
+	n := len(signal)
+	m := len(filter)
 
+	if m > n {
+		return nil
+	}
+
+	output := make([]float64, n-m+1)
+
+	for i := 0; i <= n-m; i++ {
+		sum := 0.0
+		for j := 0; j < m; j++ {
+			sum += signal[i+j] * filter[m-1-j]
+		}
+		output[i] = sum
+	}
+
+	return output
+}
 func (r *RemoteUnit) connect() error {
 	r.total = 0
 	// Initialize local variables
@@ -907,7 +1092,52 @@ func (r *RemoteUnit) reconnect() {
 	}
 }
 
+func (r *RemoteUnit) updateSettings(w http.ResponseWriter, req *http.Request) {
+
+	var buf bytes.Buffer
+
+	_, err := buf.ReadFrom(req.Body)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	md := Metadata{}
+
+	client := http.Client{}
+	response, err := client.Post("http://192.168.4.1/system", "application/json", &buf)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	all, err := io.ReadAll(response.Body)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	md = Metadata{}
+	md.Connected = true
+	err = json.Unmarshal(all, &md)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	r.display.Lock()
+	r.Unit.Metadata = md
+	r.display.Unlock()
+
+	req.Body.Close()
+	w.WriteHeader(200)
+	_, err = w.Write([]byte("OK"))
+	if err != nil {
+		return
+	}
+}
+
 func NewRemoteUnit(addr string, out chan []byte) (*RemoteUnit, error) {
+
 	r := RemoteUnit{
 		mutex:   sync.RWMutex{},
 		display: sync.RWMutex{},
@@ -942,12 +1172,34 @@ func NewRemoteUnit(addr string, out chan []byte) (*RemoteUnit, error) {
 		dsp:       map[int][]float64{},
 		address:   addr,
 	}
+
+	router := chi.NewRouter()
+
+	router.Use(cors.Handler(cors.Options{
+		// AllowedOrigins:   []string{"https://foo.com"}, // Use this to allow specific origin hosts
+		AllowedOrigins: []string{"https://*", "http://*"},
+		// AllowOriginFunc:  func(r *http.Request, origin string) bool { return true },
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		ExposedHeaders:   []string{"Link"},
+		AllowCredentials: false,
+		MaxAge:           300, // Maximum value not ignored by any of major browsers
+	}))
+	router.Post("/update", r.updateSettings)
+	go func() {
+		err := http.ListenAndServe(":5043", router)
+		if err != nil {
+		}
+	}()
+
+	r.threshold = make([]float64, BufferSize*IncomingSize)
 	r.buffer[0] = []complex128{}
 	r.buffer[1] = []complex128{}
 	r.velocity[0] = []float64{}
 	r.velocity[1] = []float64{}
 	r.velocity[2] = []float64{}
 	r.velocity[3] = []float64{}
+	r.spec = map[int][][]complex128{}
 	r.reconnect()
 
 	go r.watchdog()

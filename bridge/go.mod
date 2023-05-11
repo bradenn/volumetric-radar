@@ -10,6 +10,7 @@ require (
 	github.com/eripe970/go-dsp-utils v0.0.0-20221126143949-9c8142dc8c54 // indirect
 	github.com/faiface/beep v1.1.0 // indirect
 	github.com/go-chi/chi v1.5.4 // indirect
+	github.com/go-chi/cors v1.2.1 // indirect
 	github.com/go-fonts/liberation v0.3.0 // indirect
 	github.com/go-latex/latex v0.0.0-20230307184459-12ec69307ad9 // indirect
 	github.com/go-pdf/fpdf v0.6.0 // indirect

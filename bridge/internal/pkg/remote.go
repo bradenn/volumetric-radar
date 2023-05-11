@@ -344,22 +344,22 @@ func (s *Remote) cleanBuffers(source int, limit int) [][]float64 {
 //	return filteredSignal
 //}
 
-func matchedFilter(input []float64, filter []float64) []float64 {
-	inputLen := len(input)
-	filterLen := len(filter)
-	resultLen := inputLen - filterLen + 1
-	result := make([]float64, resultLen)
-
-	for i := 0; i < resultLen; i++ {
-		sum := 0.0
-		for j := 0; j < filterLen; j++ {
-			sum += input[i+j] * filter[filterLen-1-j]
-		}
-		result[i] = sum
-	}
-
-	return result
-}
+//func matchedFilter(input []float64, filter []float64) []float64 {
+//	inputLen := len(input)
+//	filterLen := len(filter)
+//	resultLen := inputLen - filterLen + 1
+//	result := make([]float64, resultLen)
+//
+//	for i := 0; i < resultLen; i++ {
+//		sum := 0.0
+//		for j := 0; j < filterLen; j++ {
+//			sum += input[i+j] * filter[filterLen-1-j]
+//		}
+//		result[i] = sum
+//	}
+//
+//	return result
+//}
 
 func (s *Remote) process() {
 
