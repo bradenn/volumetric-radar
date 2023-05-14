@@ -68,7 +68,7 @@ type UnitData struct {
 }
 
 const (
-	FrameDigest = 12500
+	FrameDigest = 25000
 	FrameRender = 33333
 )
 

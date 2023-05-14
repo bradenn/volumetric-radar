@@ -235,7 +235,7 @@ function sendUpdate() {
                           :value="`${props.unit.metadata.chirp.resolution}`"
                           name="Bandwidth"
                           unit="">
-                    {{ formatFrequency((state.config.chirp.resolution / 4096) * 5 * 80e6) }}
+                    {{ formatFrequency((state.config.chirp.resolution / 4096) * 2.5 * 80e6) }}
                 </Selector>
                 <Selector :change="(v) => {state.config.chirp.padding = v}" :options="state.options.padding"
                           :value="`${state.config.chirp.padding}`"

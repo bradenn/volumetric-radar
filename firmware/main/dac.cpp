@@ -142,10 +142,9 @@ static bool IRAM_ATTR chirpTriggerCallback(gptimer_handle_t timer,
         return true;
     }
 
-        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     if (power == 0) {
         vTaskNotifyGiveFromISR(dac->adcHandle, &xHigherPriorityTaskWoken);
-
     }
 
     if (power >= 0 && power < dac->chirp.steps) {
@@ -162,6 +161,7 @@ static bool IRAM_ATTR chirpTriggerCallback(gptimer_handle_t timer,
             transmit(dac->device, (uint16_t) (power) * (dac->stepResolution), 0x3000);
         }
     }
+
 
     if (dac->audible > 0) {
         alternate = (alternate + 1) % dac->audible;

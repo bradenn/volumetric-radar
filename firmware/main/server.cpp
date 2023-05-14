@@ -597,7 +597,7 @@ Server::Server() {
     httpd_register_uri_handler(server, &socket_get);
     httpd_register_uri_handler(server, &systemConf);
 
-    adc_buffer = xRingbufferCreate((sizeof(SampleData *)) * (256), RINGBUF_TYPE_NOSPLIT);
+    adc_buffer = xRingbufferCreate((sizeof(SampleData *)) * (256+64), RINGBUF_TYPE_NOSPLIT);
     if (adc_buffer == nullptr) {
         printf("Failed to create ring buffer\n");
     }

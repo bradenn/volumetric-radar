@@ -267,7 +267,7 @@ function drawPattern(ctx: CanvasRenderingContext2D, values: number, color: strin
     runningMin.get(values)?.unshift(minY)
     runningMax.get(values)?.unshift(maxY)
 
-    let runs = 10
+    let runs = 1
     minY = (runningMin.get(values)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
     maxY = (runningMax.get(values)?.slice(0, runs).reduce((a, b) => b + a) || 0) / runs
 

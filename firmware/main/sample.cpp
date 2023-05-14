@@ -12,32 +12,30 @@ static TaskHandle_t adcTaskHandle;
 static bool IRAM_ATTR adcConversionDone(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void
 *user_data) {
     BaseType_t mustYield = pdTRUE;
-    vTaskNotifyGiveFromISR(adcTaskHandle,&mustYield);
+    vTaskNotifyGiveFromISR(adcTaskHandle, &mustYield);
     portYIELD_FROM_ISR(mustYield);
     return (mustYield == pdFALSE);
 }
 
 esp_err_t Sample::listen(int64_t chirpDuration, uint16_t **out) {
-    if (xSemaphoreTake(runtime, pdMS_TO_TICKS(0.5)) != pdTRUE) {
+    if (xSemaphoreTake(runtime, 1) != pdTRUE) {
         printf("Sample semaphore cannot lock!\n");
         return ESP_ERR_TIMEOUT;
     }
 
-
-    esp_err_t err;
-//    err = initializeContinuousAdc();
-//    if(err != ESP_OK) {
-//        return err;
-//    }
     adcTaskHandle = xTaskGetCurrentTaskHandle();
 
+    esp_err_t err;
     err = adc_continuous_start(adcContinuousHandle);
     if (err != ESP_OK) {
 //        destructContinuousAdc();
         xSemaphoreGive(runtime);
         return err;
     }
-
+//    err = initializeContinuousAdc();
+//    if(err != ESP_OK) {
+//        return err;
+//    }
     const uint32_t maxLength = SAMPLE_CONVERSION_FRAME_SIZE;
 
     uint8_t buffer[maxLength] = {0};
@@ -109,8 +107,9 @@ esp_err_t Sample::listen(int64_t chirpDuration, uint16_t **out) {
         }
     }
     // Stop the ADC from listening and free DMA memory
-    adc_continuous_stop(adcContinuousHandle);
+//    adc_continuous_stop(adcContinuousHandle);
 //    destructContinuousAdc();
+    adc_continuous_stop(adcContinuousHandle);
     xSemaphoreGive(runtime);
     return ESP_OK;
 }
@@ -230,6 +229,7 @@ esp_err_t Sample::initializeContinuousAdc() {
         printf("Failed to register continuous adc event: %s\n", esp_err_to_name(err));
         return err;
     }
+
 
     return ESP_OK;
 }
