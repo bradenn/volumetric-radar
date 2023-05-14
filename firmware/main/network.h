@@ -77,6 +77,8 @@ public:
 
     static esp_err_t scan();
 
+    esp_err_t startPassiveAP();
+
 private:
 
     int attemptNum = 0;

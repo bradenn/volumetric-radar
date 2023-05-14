@@ -44,8 +44,10 @@ Runtime::Runtime() {
             Indicator::instance().setIndicator(FAULT, true);
             return;
         }
+        return;
     } else {
         state = CONNECTING;
+//        err = net.startPassiveAP();
         err = net.startSTA({.ssid = ssid, .passwd = passwd});
         if (err != ESP_OK) {
             printf("Network::STA initialization failed. (%s)\n", esp_err_to_name(err));
@@ -54,8 +56,9 @@ Runtime::Runtime() {
         }
         printf("Connected\n");
         Indicator::instance().setIndicator(LINK, true);
-        Server();
     }
+
+    Server();
 
 }
 

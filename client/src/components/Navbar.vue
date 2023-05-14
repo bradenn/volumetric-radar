@@ -13,9 +13,6 @@
         <router-link class="navbar-router-link" to="/zones">Zones</router-link>
       </div>
     </div>
-    <div class="d-flex gap-2 label-c3 label-w400 text-accent align-items-center">
-      Braden<i class="fa-solid fa-caret-down"></i>
-    </div>
   </div>
 </template>
 

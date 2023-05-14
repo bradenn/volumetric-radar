@@ -30,6 +30,7 @@ void Persistent::writeString(const char *key, const char* value) const {
     ESP_ERROR_CHECK(nvs_set_str(handle, key, value));
 }
 
+
 // Read a string from non-volatile storage
 void Persistent::readString(const char *key, char *dest) const {
     size_t stringSize = 0;
@@ -54,9 +55,7 @@ void Persistent::writeInt(const char *key, int32_t value) const {
 void Persistent::readInt(const char *key, int32_t *dest, int32_t defaultValue) const {
     esp_err_t err = nvs_get_i32(handle, key, dest);
     if(err == ESP_ERR_NVS_NOT_FOUND) {
-        nvs_set_i32(handle, key, defaultValue);
+        ESP_ERROR_CHECK(nvs_set_i32(handle, key, defaultValue));
     }
 
 }
-
-

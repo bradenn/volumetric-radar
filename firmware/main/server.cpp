@@ -7,18 +7,27 @@
 #include <sstream>
 #include <esp_mac.h>
 #include <lwip/sockets.h>
+#include <iomanip>
+#include <hal/gpio_types.h>
+#include <driver/temperature_sensor.h>
+#include <driver/gptimer.h>
+#include <esp_adc/adc_oneshot.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/ringbuf.h"
 #include "server.h"
-#include "socket.h"
-#include "controller.h"
 #include "settings.h"
+#include "sample.h"
+#include "dac.h"
+#include "gyro.h"
+#include "runtime.h"
 
-static RingbufHandle_t buf_handle;
+static RingbufHandle_t adc_buffer{};
+static RingbufHandle_t dac_buffer{};
+static RingbufHandle_t gyro_buffer{};
+
 
 static char *generateMetadata() {
-    auto srv = &Settings::instance();
 
     // Initialize a json object
     auto obj = cJSON_CreateObject();
@@ -33,21 +42,36 @@ static char *generateMetadata() {
     snprintf((char *) macAddr, 18, "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     // Add generated variables to the object
     cJSON_AddStringToObject(obj, "name", name);
+    cJSON_AddStringToObject(obj, "mac", macAddr);
     // Add compiled config metadata to the object
-    const int sampleRate = 80000;
     cJSON_AddNumberToObject(obj, "base", CONFIG_vRADAR_BASE_FREQUENCY);
     cJSON_AddNumberToObject(obj, "xFov", CONFIG_vRADAR_FOV_X);
     cJSON_AddNumberToObject(obj, "yFov", CONFIG_vRADAR_FOV_Y);
     // Generate the ADC parameters
     auto adc = cJSON_CreateObject();
-    cJSON_AddNumberToObject(adc, "window", BUFFER_SIZE);
-    cJSON_AddNumberToObject(adc, "bits", ADC_BIT_WIDTH);
-    cJSON_AddNumberToObject(adc, "samples", srv->sampling.samples);
-    cJSON_AddNumberToObject(adc, "frequency", srv->sampling.frequency);
-    cJSON_AddNumberToObject(adc, "prf", srv->sampling.prf);
-    cJSON_AddNumberToObject(adc, "pulse", srv->sampling.pulse);
-    // Add the adc object to the root objects
-    cJSON_AddItemToObject(obj, "adc", adc);
+    auto settings = Settings::instance();
+
+    auto system = settings.getSystem();
+    cJSON_AddNumberToObject(obj, "enabled", system.enabled);
+    cJSON_AddNumberToObject(obj, "audible", system.audible);
+    cJSON_AddNumberToObject(obj, "gyro", system.gyro);
+
+    cJSON *chirpObj = cJSON_CreateObject();
+    cJSON_AddNumberToObject(chirpObj, "prf", system.chirp.prf);
+    cJSON_AddNumberToObject(chirpObj, "duration", system.chirp.duration);
+    cJSON_AddNumberToObject(chirpObj, "steps", system.chirp.steps);
+    cJSON_AddNumberToObject(chirpObj, "padding", system.chirp.padding);
+    cJSON_AddNumberToObject(chirpObj, "resolution", system.chirp.resolution);
+
+    cJSON *samplingObj = cJSON_CreateObject();
+    cJSON_AddNumberToObject(samplingObj, "frequency", system.sampling.frequency);
+    cJSON_AddNumberToObject(samplingObj, "samples", system.sampling.samples);
+    cJSON_AddNumberToObject(samplingObj, "attenuation", system.sampling.attenuation);
+    cJSON_AddNumberToObject(obj, "updated", (double) esp_timer_get_time());
+
+    cJSON_AddItemToObject(obj, "sampling", samplingObj);
+    cJSON_AddItemToObject(obj, "chirp", chirpObj);
+
     // Marshal the object to json as a string
     char *out = cJSON_PrintUnformatted(obj);
     // Free the memory used to create the object
@@ -65,6 +89,40 @@ static esp_err_t options_handler(httpd_req_t *req) {
     // Send the status OK message
     httpd_resp_set_status(req, HTTPD_200);
     // Return without error
+    return ESP_OK;
+}
+
+static esp_err_t systemConfigHandler(httpd_req_t *req) {
+    // Send payload type header
+    httpd_resp_set_type(req, "application/json");
+    // Allow Cross-Origin Access
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+
+    const int size = 1024;
+    char buf[size];
+    int i = httpd_req_recv(req, buf, size);
+    if (i <= 0) {
+        httpd_resp_send(req, "Bad Request", HTTPD_RESP_USE_STRLEN);
+        // Send the status OK message
+        httpd_resp_set_status(req, HTTPD_400);
+    }
+
+    auto s = &Settings::instance();
+    s->systemFromJson(buf);
+    s->push();
+
+    auto md = generateMetadata();
+
+
+    httpd_resp_send(req, md, HTTPD_RESP_USE_STRLEN);
+    // Send the status OK message
+    httpd_resp_set_status(req, HTTPD_200);
+    // Return without error
+
+    free(md);
+
     return ESP_OK;
 }
 
@@ -116,6 +174,17 @@ static esp_err_t restart(httpd_req_t *req) {
     return ESP_OK;
 }
 
+void int64ToUint8Array(int64_t input, uint8_t *output) {
+    output[0] = (input >> 56) & 0xFF;
+    output[1] = (input >> 48) & 0xFF;
+    output[2] = (input >> 40) & 0xFF;
+    output[3] = (input >> 32) & 0xFF;
+    output[4] = (input >> 24) & 0xFF;
+    output[5] = (input >> 16) & 0xFF;
+    output[6] = (input >> 8) & 0xFF;
+    output[7] = input & 0xFF;
+}
+
 
 // Socket handler is the http method handler for requests made to the /ws endpoint
 static esp_err_t socket_get_handler(httpd_req_t *req) {
@@ -140,7 +209,7 @@ static esp_err_t socket_get_handler(httpd_req_t *req) {
     // If the frame is not empty
     if (ws_pkt.len) {
         // Allocate memory for the incoming buffer
-        auto buffer = (uint8_t *) calloc(1, ws_pkt.len + 1);;
+        auto buffer = (uint8_t *) calloc(1, ws_pkt.len + 1);
         // Set the packet payload pointer to the buffer
         ws_pkt.payload = buffer;
         // Receive the rest of the data
@@ -178,107 +247,106 @@ static esp_err_t socket_get_handler(httpd_req_t *req) {
     return 0;
 }
 
-const char hexTable[] = "0123456789ABCDEF";
-
-void intArrayToHexString(const int *arr, int arrSize, char *outStr) {
-    // Allocate space for the hex string
-    const int chars = 3;
-    int hexStrSize = BUFFER_SIZE * chars + 1;
-    char hexStr[BUFFER_SIZE * chars + 1] = {};
-    hexStr[hexStrSize - 1] = '\0'; // Null terminate the string
-    // Convert each int in the array to hex and concatenate it onto the hex string
-    int i;
-    for (i = 0; i < arrSize; i++) {
-        hexStr[i * chars] = hexTable[(arr[i] >> 8) & 0xF];
-        hexStr[i * chars + 1] = hexTable[(arr[i] >> 4) & 0xF];
-        hexStr[i * chars + 2] = hexTable[arr[i] & 0xF];
-    }
-
-    // Copy the hex string to the output string
-    strcpy(outStr, hexStr);
+void uint16ToUint8Array(uint16_t input, uint8_t *output) {
+    output[0] = (input >> 8) & 0xFF;
+    output[1] = input & 0xFF;
 }
 
-bool generatePacket(char *dst, int buffer, int **data, int m, int n) {
-    auto obj = cJSON_CreateObject();
-    // Create an array to hold the individual buffers
-    auto results = cJSON_CreateArray();
-    // Allocate memory on the stack to contain the converted hex strings
-    char hex_str[BUFFER_SIZE * 3 + 1];
-    // For each channel, add a string of hex to the results array
-    for (int i = 0; i < m; i++) {
-        // Convert the pointer array into a hex buffer for transport
-        if (data[i] == nullptr) {
-            continue;
-        }
-        intArrayToHexString(data[i], BUFFER_SIZE, hex_str);
-        // Add the string to the results array
-        cJSON_AddItemToArray(results, cJSON_CreateString(hex_str));
-    }
-    // Add the results array to the JSON object
-    cJSON_AddItemToObject(obj, "results", results);
-    // Add the current time since system boot to the JSON object
-    cJSON_AddItemToObject(obj, "time", cJSON_CreateNumber((double) esp_timer_get_time()));
-    // Print the JSON array out into the stack array
-    auto val = cJSON_PrintPreallocated(obj, dst, buffer, false);
-    // Free all memory used to create the JSON object
-    cJSON_Delete(obj);
-    // If the JSON export operation fails, cleanup and quietly move on
-    if (val == 0) {
-        // Print out a warning for context
-        printf("A null string has been created...\n");
-        // Proceed back to the beginning of the innermost while loop
-        return false;
-    }
-    return true;
-}
+SemaphoreHandle_t wsLock;
 
-
-static void callback(int *arr[5]) {
+static void callback(SampleData *sd) {
     if (fd < 0) {
-        vTaskDelay(1);
         return;
     }
     httpd_ws_frame_t out_packer;
     memset(&out_packer, 0, sizeof(httpd_ws_frame_t));
 
-//    auto obj = cJSON_CreateObject();
-//    auto results = cJSON_CreateArray();
-//    char hex_str[BUFFER_SIZE * 2 + 1];
-//    for (int i = 0; i < 4; i++) {
-//        intArrayToHexString(arr[i], BUFFER_SIZE, hex_str);
-//        cJSON_AddItemToArray(results, cJSON_CreateString(hex_str));
-//    }
-//
-//    cJSON_AddItemToObject(obj, "results", results);
-//
-//    cJSON_AddItemToObject(obj, "time", cJSON_CreateNumber((double) esp_timer_get_time()));
-//
-//    const int len = 1500; // Size of buffers in json
-//    char out[len];
-//
-//    auto val = cJSON_PrintPreallocated(obj, out, len, false);
-//    if (val == 0) {
-//        cJSON_Delete(obj);
-//        printf("A null string has been created...\n");
-//        return;
-//    }
-    const int len = 5 * (BUFFER_SIZE * 8) + 512; // Size of buffers in json
-    char out[len];
-    if (!generatePacket(out, len, arr, 5, BUFFER_SIZE)) {
-        printf("Packet generation failed.\n");
+    size_t total_len = sd->size * 4 * sizeof(uint16_t) + sizeof(int64_t) * 2;
+    // Allocate memory for the binary data buffer
+    auto *binary_data = (uint8_t *) malloc(total_len);
+
+    for (int i = 0; i < 4; i++) {
+        // Convert the pointer array into a hex buffer for transport
+        if (sd->data[i] == nullptr) {
+            free(binary_data);
+            return;
+        }
+
+        for (int j = 0; j < sd->size; ++j) {
+            uint16ToUint8Array(sd->data[i][j], &binary_data[i * sd->size * sizeof(uint16_t) +
+                                                            j * sizeof(uint16_t)]);
+        }
     }
-    out_packer.payload = (uint8_t *) out;
-    out_packer.len = strlen(out);
-    out_packer.type = HTTPD_WS_TYPE_TEXT;
 
+    int64ToUint8Array(sd->start, &binary_data[4 * sd->size * sizeof(uint16_t)]);
+    int64ToUint8Array(sd->stop, &binary_data[4 * sd->size * sizeof(uint16_t) + sizeof(int64_t)]);
+//    int64ToUint8Array(sd->chirpStart, &binary_data[4 * sd->size * sizeof(uint16_t) + sizeof(int64_t) * 2]);
+//    int64ToUint8Array(sd->chirpStop, &binary_data[4 * sd->size * sizeof(uint16_t) + sizeof(int64_t) * 3]);
 
+    out_packer.payload = (uint8_t *) binary_data;
+    out_packer.len = total_len;
+    out_packer.type = HTTPD_WS_TYPE_BINARY;
+
+//    send_websocket_frame_using_queue(hd, fd, &out_packer);
+    if (xSemaphoreTake(wsLock, portMAX_DELAY) != pdTRUE) {
+        free(binary_data);
+        return;
+    }
     auto ret = httpd_ws_send_frame_async(hd, fd, &out_packer);
     if (ret != ESP_OK) {
         printf("Send to bridge failed!\n");
         fd = -1;
+    }
+
+    free(binary_data);
+    xSemaphoreGive(wsLock);
+
+}
+
+
+static void sendMetadata(GyroData *gd, float temperature, int8_t rssi) {
+    if (fd < 0) {
+        vTaskDelay(1);
         return;
     }
 
+    httpd_ws_frame_t out_packer;
+    memset(&out_packer, 0, sizeof(httpd_ws_frame_t));
+//    char over[1024]{};
+//    vTaskGetRunTimeStats(over);
+
+    auto obj = cJSON_CreateObject();
+    cJSON_AddNumberToObject(obj, "pitch", gd->pitch);
+    cJSON_AddNumberToObject(obj, "roll", gd->roll);
+    cJSON_AddNumberToObject(obj, "temperature", temperature);
+    cJSON_AddNumberToObject(obj, "rssi", rssi);
+//    cJSON_AddStringToObject(obj, "buffer", over);
+
+    char *buf = (char *) malloc(sizeof(char) * 512);
+
+    if (!cJSON_PrintPreallocated(obj, buf, 512, false)) {
+        cJSON_Delete(obj);
+        return;
+    }
+
+    out_packer.payload = (uint8_t *) buf;
+    out_packer.len = strlen(buf);
+    out_packer.type = HTTPD_WS_TYPE_TEXT;
+    if (xSemaphoreTake(wsLock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        free(buf);
+        return;
+    }
+//    send_websocket_frame_using_queue(hd, fd, &out_packer);
+    auto ret = httpd_ws_send_frame_async(hd, fd, &out_packer);
+    free(buf);
+    if (ret != ESP_OK) {
+        printf("Send to bridge failed!\n");
+        fd = -1;
+        xSemaphoreGive(wsLock);
+        return;
+    }
+    cJSON_Delete(obj);
+    xSemaphoreGive(wsLock);
 }
 
 
@@ -303,6 +371,14 @@ static const httpd_uri_t config = {
         .is_websocket = false,
 };
 
+static const httpd_uri_t systemConf = {
+        .uri       = "/system",
+        .method    = HTTP_POST,
+        .handler   = systemConfigHandler,
+        .is_websocket = false,
+};
+
+
 static const httpd_uri_t reboot = {
         .uri       = "/reboot",
         .method    = HTTP_POST,
@@ -311,169 +387,200 @@ static const httpd_uri_t reboot = {
 };
 
 
+void gyroWatcher(void *arg) {
+    temperature_sensor_handle_t temp_handle = nullptr;
+    temperature_sensor_config_t temp_sensor = {
+            .range_min = 10,
+            .range_max = 65,
+    };
+    ESP_ERROR_CHECK(temperature_sensor_install(&temp_sensor, &temp_handle));
+
+
+    while (1) {
+        size_t size = -1;
+        void *dat = xRingbufferReceive(gyro_buffer, &size, portMAX_DELAY);
+        if (size <= 0 || dat == nullptr) {
+//            vRingbufferReturnItem(gyro_buffer, dat);
+            continue;
+        }
+
+        auto *data = (GyroData *) dat;
+        // Enable temperature sensor
+        ESP_ERROR_CHECK(temperature_sensor_enable(temp_handle));
+        // Get converted sensor data
+        float temp;
+        ESP_ERROR_CHECK(temperature_sensor_get_celsius(temp_handle, &temp));
+        // Disable the temperature sensor if it's not needed and save the power
+        ESP_ERROR_CHECK(temperature_sensor_disable(temp_handle));
+        wifi_ap_record_t ap_info;
+        esp_err_t err = esp_wifi_sta_get_ap_info(&ap_info);
+        int8_t rssi = -1;
+
+        if (err == ESP_OK) {
+
+            rssi = ap_info.rssi;
+        } else {
+            rssi = -1;
+        }
+
+        sendMetadata(data, temp, rssi);
+
+        vRingbufferReturnItem(gyro_buffer, dat);
+
+    }
+}
+
 void watcher(void *arg) {
     while (1) {
 
         size_t size = -1;
-
-        void *dat = xRingbufferReceive(buf_handle, &size, portMAX_DELAY);
-        if (size < 0) {
-//            vRingbufferReturnItem(buf_handle, dat);
+        void *dat = xRingbufferReceive(adc_buffer, &size, portMAX_DELAY);
+        if (dat == nullptr || size <= 0) {
+//            vRingbufferReturnItem(adc_buffer, dat);
             continue;
         }
+        auto data = (SampleData *) dat;
 
-        int **data = (int **) dat;
-
+//        callback(data);
         callback(data);
+//        printf("Sending Data... (%lu)\n", esp_get_free_heap_size());
 
-        for (int i = 0; i < 5; ++i) {
-            free(data[i]);
+        for (int i = 0; i < 4; i++) {
+            if (data->data[i] != nullptr) {
+                heap_caps_free(data->data[i]);
+            }
         }
+        heap_caps_free(data->data);
 
-        vRingbufferReturnItem(buf_handle, dat);
+        vRingbufferReturnItem(adc_buffer, dat);
+
     }
 }
 
-void runServer(void *params) {
+static int64_t last = 0;
+static int64_t loop = 0;
 
-    uint8_t rx[200];
 
-    while (1) {
-        struct sockaddr_in dest{
-                .sin_family = AF_INET,
-                .sin_port = htons(5545),
-                .sin_addr {
-                        .s_addr = htonl(INADDR_ANY),
-                },
-        };
+void adcTask(void *arg) {
+    auto s = new Sample();
 
-        int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
-        if (sock < 0) {
-            printf("Socket creation failed...\n");
+    new DAC(xTaskGetCurrentTaskHandle());
+    last = esp_timer_get_time();
+    int samples = 256;
+    while (true) {
+        auto settings = Settings::instance();
+        auto chirp = settings.getSystem().chirp;
+
+        samples = (int) ceil(((double) chirp.prf / 1000.0) / (double) (1000.0 / settings.getSystem().sampling
+                .frequency));
+//        printf("Capturing: %d\n", samples);
+        if (samples < 32) samples = 32;
+        if (samples > 1024) samples = 1024;
+
+//        auto itemSize = xRingbufferGetMaxItemSize(adc_buffer);
+//        auto freeSize = xRingbufferGetCurFreeSize(adc_buffer);
+//
+//        if (freeSize < itemSize) {
+//            size_t size = 0;
+//            auto *item = xRingbufferReceive(adc_buffer, &size, 1);
+//            if (item != nullptr) {
+//                auto *data = (SampleData *) item;
+//                if (data->data != nullptr) {
+//                    for (int i = 0; i < 4; ++i) {
+//                        if (data->data[i] != nullptr) heap_caps_free(data->data[i]);
+//                    }
+//                    heap_caps_free(data->data);
+//                }
+//                vRingbufferReturnItem(adc_buffer, item);
+//            }
+//        }
+
+        auto **data = (uint16_t **) heap_caps_malloc(sizeof(uint16_t *) * 4, MALLOC_CAP_SPIRAM);
+        if (data == nullptr) {
+            printf("No Memory\n");
             vTaskDelay(pdMS_TO_TICKS(1));
             continue;
         }
 
-        printf("Socket Initialized...\n");
-
-        struct timeval timeout;
-        timeout.tv_sec = 3;
-        timeout.tv_usec = 0;
-        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
-
-        int err = bind(sock, (struct sockaddr *) &dest, sizeof(dest));
-        if (err < 0) {
-            printf("Socket bind failed... (%d)\n", err);
-            vTaskDelay(pdMS_TO_TICKS(1));
-            continue;
-        }
-
-        err = listen(sock, 1);
-        if (err != 0) {
-            printf("listen failed... (%d)\n", err);
-            vTaskDelay(pdMS_TO_TICKS(1));
-            continue;
-        }
-
-
-        printf("Socket Bound...\n");
-        int keepAlive = 1;
-        int keepIdle = 1;
-        int keepInterval = 1;
-        int keepCount = 1;
-        int64_t begin = esp_timer_get_time();
-        int64_t cycles = 0;
-        while (1) {
-            struct sockaddr_in sockAddr;
-            socklen_t sockLen = sizeof(sockAddr);
-            // Wait for a client to connect and send a message
-            int local = accept(sock, (struct sockaddr *) &sockAddr, &sockLen);
-            if (local < 0) {
-                vTaskDelay(1);
+        for (int i = 0; i < 4; ++i) {
+            data[i] = (uint16_t *) heap_caps_malloc(sizeof(uint16_t) * samples, MALLOC_CAP_SPIRAM);
+            if (data[i] == nullptr) {
+                printf("No Memory\n");
+                vTaskDelay(pdMS_TO_TICKS(1));
                 continue;
             }
-
-            setsockopt(local, SOL_SOCKET, SO_KEEPALIVE, &keepAlive, sizeof(int));
-            setsockopt(local, IPPROTO_TCP, TCP_KEEPIDLE, &keepIdle, sizeof(int));
-            setsockopt(local, IPPROTO_TCP, TCP_KEEPINTVL, &keepInterval, sizeof(int));
-            setsockopt(local, IPPROTO_TCP, TCP_KEEPCNT, &keepCount, sizeof(int));
-
-            recv(sock, rx, sizeof(rx) - 1, 0);
-
-            auto metadata = generateMetadata();
-            err = send(local, metadata, strlen(metadata), MSG_WAITALL);
-            // If there was an error sending the buffer, break out of this loop and force reconnect
-            if (err < 0) {
-                printf("Send failed. (%d) %d\n", err, errno);
-                break;
-            }
-            cJSON_free(metadata);
-
-            // Run indefinitely while the client is connected
-            while (1) {
-                size_t size;
-                // Try to pull the next item from the ring, wait until something arrives
-                void *dat = xRingbufferReceive(buf_handle, &size, portMAX_DELAY);
-                // If there was an issue with the ring, wait a tick and try again
-                if (dat == nullptr) {
-//                    vTaskDelay(1);
-                    continue;
-                }
-                // Cast the ring data to the double pointer array
-                int **data = (int **) dat;
-//                int start = esp_timer_get_time();
-                // Create a new JSON object to contain the outgoing buffers
-                const int len = 4 * (BUFFER_SIZE * 2) + 512; // Size of buffers in json
-                char out[len];
-                if (!generatePacket(out, len, data, 4, BUFFER_SIZE)) {
-                    printf("Packet generation failed.\n");
-                }
-                // Free all the channel buffers
-                for (int i = 0; i < 4; ++i) {
-                    if (data[i] != nullptr) free(data[i]);
-                }
-                vRingbufferReturnItem(buf_handle, dat);
-                // Try sending the JSON buffer to the client
-                int rawLength = (int) strlen(out);
-                int messageLength = rawLength + 1;
-                out[rawLength] = '\0';
-                int toWrite = messageLength;
-                bool willExit = false;
-                while (toWrite > 0) {
-                    int n = send(local, out + (messageLength - toWrite), toWrite, 0);
-                    if (n < 0) {
-                        willExit = true;
-                        break;
-                    }
-                    toWrite -= n;
-                }
-                if (willExit) {
-                    break;
-                }
-                cycles++;
-                int64_t now = esp_timer_get_time();
-                if (now - begin > 1000 * 1000) {
-                    printf("%.2f packets/s\n", (double) cycles / ((double) (now - begin) / 1000.0 / 1000.0));
-                    begin = now;
-                    cycles = 0;
-                }
-            }
-            printf("TCP Socket lost...\n");
-            close(local);
-
         }
-        close(sock);
+
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        int64_t start = esp_timer_get_time();
+        esp_err_t err = s->listen(samples, data);
+        if (err != ESP_OK) {
+            printf("ERROR: %s\n", esp_err_to_name(err));
+            for (int i = 0; i < 4; ++i) {
+                if (data[i] != nullptr) heap_caps_free(data[i]);
+            }
+            heap_caps_free(data);
+            vTaskDelay(1);
+            continue;
+        }
+
+        int64_t end = esp_timer_get_time();
+        int64_t cStart = 0;
+        int64_t cStop = 0;
+
+        SampleData sd = {
+                .data = data,
+                .size = samples,
+                .start = start,
+                .stop = end,
+                .chirpStart = cStart,
+                .chirpStop = cStop,
+        };
+
+
+        if (xRingbufferSend(adc_buffer, (void *) &sd, sizeof(sd), pdMS_TO_TICKS(0.5)) != pdTRUE) {
+            printf("Overflow :< \n");
+            for (int i = 0; i < 4; ++i) {
+                if (data[i] != nullptr) heap_caps_free(data[i]);
+            }
+            heap_caps_free(data);
+        } else {
+//            if (loop == 0) {
+//                printf("Collected Sample: Duration=%lld, Interval=%lld Last: %d\n", end - start, esp_timer_get_time() -
+//                last, sd.data[3][511]);
+//            }
+//            loop = (loop + 1) % 4;
+//            last = esp_timer_get_time();
+        }
+
 
     }
+    delete s;
+}
 
+//void dacTask(void *arg) {
+//    auto handle = (TaskHandle_t *) arg;
+//
+//    while (1) {
+//        vTaskDelay(pdMS_TO_TICKS(1000));
+//    }
+//    delete dac;
+//}
+
+void gyroTask(void *arg) {
+    while (1) {
+
+    }
 }
 
 
 Server::Server() {
-
+    wsLock = xSemaphoreCreateBinary();
     if (server != nullptr) {
         return;
     }
+    xSemaphoreGive(wsLock);
 
     server = nullptr;
     httpd_config_t httpdConf = HTTPD_DEFAULT_CONFIG();
@@ -483,33 +590,38 @@ Server::Server() {
         return;
     }
 
-    Settings *s = &Settings::instance();
+    Settings::instance();
     httpd_register_uri_handler(server, &config);
     httpd_register_uri_handler(server, &reboot);
     httpd_register_uri_handler(server, &options);
     httpd_register_uri_handler(server, &socket_get);
-    AdcConfig conf = {
-            .sampling{
-                    .rate = s->sampling.frequency,
-                    .subSamples = s->sampling.samples,
-                    .attenuation = ADC_ATTEN_DB_0
-            },
-            .channels {
-                    .count = 4,
-                    .ports = {3, 4, 5, 6}
-            }
-    };
+    httpd_register_uri_handler(server, &systemConf);
 
-
-    //Create ring buffer
-
-    buf_handle = xRingbufferCreate((sizeof(int *) * 5) * 16, RINGBUF_TYPE_NOSPLIT);
-    if (buf_handle == nullptr) {
+    adc_buffer = xRingbufferCreate((sizeof(SampleData *)) * (256+64), RINGBUF_TYPE_NOSPLIT);
+    if (adc_buffer == nullptr) {
         printf("Failed to create ring buffer\n");
     }
 
-    adc = new Adc(conf, buf_handle);
-    new Controller(adc, s->sampling.prf, s->sampling.pulse);
-    xTaskCreatePinnedToCore(watcher, "adcWatch", 4096 * 4, nullptr, tskIDLE_PRIORITY + 4, nullptr, 0);
+    dac_buffer = xRingbufferCreate((sizeof(SampleData *)) * 4, RINGBUF_TYPE_NOSPLIT);
+    if (dac_buffer == nullptr) {
+        printf("Failed to create ring buffer\n");
+    }
+
+    gyro_buffer = xRingbufferCreate(sizeof(GyroData) * 20, RINGBUF_TYPE_NOSPLIT);
+    if (gyro_buffer == nullptr) {
+        printf("Failed to create ring buffer\n");
+    }
+
+    printf("RingBuffers initialized...\n");
+
+    new Gyro(gyro_buffer);
+
+    TaskHandle_t adcTaskHandle{};
+    xTaskCreatePinnedToCore(watcher, "watcherTask", 8192, nullptr, tskIDLE_PRIORITY + 5, nullptr, 1);
+    xTaskCreate(gyroWatcher, "gyroWatcher", 8192, nullptr, tskIDLE_PRIORITY + 3, nullptr);
+    xTaskCreatePinnedToCore(adcTask, "adcTask", 8192, nullptr, tskIDLE_PRIORITY + 6, &adcTaskHandle, 0);
+
+//    xTaskCreate(dacTask, "dacTask", 24000, &adcTaskHandle, tskIDLE_PRIORITY + 3, nullptr);
+
 
 }

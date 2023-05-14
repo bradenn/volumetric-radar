@@ -8,7 +8,6 @@
 #include <cstring>
 #include <esp_netif.h>
 #include <esp_event.h>
-#include "adc.h"
 #include "network.h"
 #include "persistent.h"
 #include "indicator.h"
@@ -20,7 +19,14 @@ enum RuntimeState {
     CONNECTING = 2,
     RUNNING = 3,
 };
-
+typedef struct SampleData {
+    uint16_t **data;
+    int size;
+    int64_t start;
+    int64_t stop;
+    int64_t chirpStart;
+    int64_t chirpStop;
+} SampleData;
 class Runtime {
 
 public:

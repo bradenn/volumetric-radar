@@ -13,7 +13,7 @@ func main() {
 
 	go server.Serve()
 
-	out := make(chan []byte, 100)
+	out := make(chan []byte, 128)
 	go func() {
 		for bytes := range out {
 			err = server.Broadcast(bytes)
@@ -29,7 +29,8 @@ func main() {
 		return
 	}
 
-	us.AddUnit("ws://10.0.1.133/ws")
+	us.AddUnit("ws://10.0.1.141/ws")
+	//us.AddUnit("ws://localhost:4043/ws")
 
 	for {
 	}

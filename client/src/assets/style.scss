@@ -6,6 +6,7 @@ body {
 
 .element {
   display: flex;
+  position: relative;
   flex-direction: row;
   align-items: center;
   filter: drop-shadow(0px 10px 60px rgba(0, 0, 0, 0.1));
@@ -89,6 +90,14 @@ $fontColors: (
         "7": 7,
         "8": 8,
 );
+@each $clr, $i in $fontColors {
+  .label-o#{$clr} {
+    color: rgba(255, 255, 255, $i * 0.125);
+
+  }
+}
+
+
 .el {
 
 
@@ -114,12 +123,7 @@ $accent: rgba(255, 128, 10);
   color: lighten($accent, 0.8);
 }
 
-@each $clr, $i in $fontColors {
-  .label-o#{$clr} {
-    color: rgba(255, 255, 255, $i * 0.125);
 
-  }
-}
 
 
 .label {

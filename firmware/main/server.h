@@ -11,7 +11,6 @@
 #include <esp_http_server.h>
 #include <cJSON.h>
 #include <esp_timer.h>
-#include "adc.h"
 static httpd_handle_t hd{};
 static int fd = -1;
 
@@ -26,7 +25,6 @@ class Server{
 public:
 
     Server();
-    Adc *adc;
 
 private:
 

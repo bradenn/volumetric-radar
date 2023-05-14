@@ -51,7 +51,9 @@ func findLocalMaxima(signal []float64, threshold float64) []int {
 
 	for i := 1; i < len(signal)-1; i++ {
 		if signal[i] > signal[i-1] && signal[i] > signal[i+1] && signal[i] >= threshold {
-			localMaxima = append(localMaxima, i)
+			if i > 0 && i < len(signal)-1 {
+				localMaxima = append(localMaxima, i)
+			}
 		}
 	}
 
@@ -318,44 +320,47 @@ func (s *Remote) cleanBuffers(source int, limit int) [][]float64 {
 	}
 }
 
-func hanningWindow(n int) []float64 {
-	window := make([]float64, n)
-	for i := 0; i < n; i++ {
-		window[i] = 0.5 * (1 - math.Cos(2*math.Pi*float64(i)/float64(n-1)))
-	}
-	return window
-}
-func applyHanningWindow(signal []complex128) []complex128 {
-	n := len(signal)
-	window := hanningWindow(n)
-	for i := 0; i < n; i++ {
-		signal[i] = signal[i] * complex(window[i], 0)
-	}
-	return signal
-}
-func matchedFilter(signal []complex128, pulse []complex128) []complex128 {
-	// calculate the complex conjugate of the pulse signal
-	pulseConj := make([]complex128, len(pulse))
-	for i, val := range pulse {
-		pulseConj[i] = cmplx.Conj(val)
-	}
+//func matchedFilter(signal []complex128, pulse []complex128) []complex128 {
+//	// calculate the complex conjugate of the pulse signal
+//	pulseConj := make([]complex128, len(pulse))
+//	for i, val := range pulse {
+//		pulseConj[i] = cmplx.Conj(val)
+//	}
+//
+//	// pad the signal with zeros to ensure it keeps the same length
+//	paddedSignal := make([]complex128, len(signal)+len(pulse)-1)
+//	copy(paddedSignal, signal)
+//
+//	// perform the matched filter
+//	filteredSignal := make([]complex128, len(signal))
+//	for i := 0; i < len(signal); i++ {
+//		var sum complex128
+//		for j := 0; j < len(pulse); j++ {
+//			sum += paddedSignal[i+j] * pulseConj[j]
+//		}
+//		filteredSignal[i] = sum
+//	}
+//
+//	return filteredSignal
+//}
 
-	// pad the signal with zeros to ensure it keeps the same length
-	paddedSignal := make([]complex128, len(signal)+len(pulse)-1)
-	copy(paddedSignal, signal)
+//func matchedFilter(input []float64, filter []float64) []float64 {
+//	inputLen := len(input)
+//	filterLen := len(filter)
+//	resultLen := inputLen - filterLen + 1
+//	result := make([]float64, resultLen)
+//
+//	for i := 0; i < resultLen; i++ {
+//		sum := 0.0
+//		for j := 0; j < filterLen; j++ {
+//			sum += input[i+j] * filter[filterLen-1-j]
+//		}
+//		result[i] = sum
+//	}
+//
+//	return result
+//}
 
-	// perform the matched filter
-	filteredSignal := make([]complex128, len(signal))
-	for i := 0; i < len(signal); i++ {
-		var sum complex128
-		for j := 0; j < len(pulse); j++ {
-			sum += paddedSignal[i+j] * pulseConj[j]
-		}
-		filteredSignal[i] = sum
-	}
-
-	return filteredSignal
-}
 func (s *Remote) process() {
 
 	channel0 := Channel{}
@@ -385,18 +390,18 @@ func (s *Remote) process() {
 		dx := cmplx.Phase(cmp2[i]) - cmplx.Phase(cmp1[i])
 		channel0.Phase = append(channel0.Phase, math.Asin(dx*0.2257))
 	}
-	match := []complex128{
-		1 - 0i, 1 - 0i, 1 - 0i, 1 - 0i, 1 - 0i,
-		1 - 0i, 1 - 0i, 1 - 0i, 1 - 0i, 1 - 0i,
-		0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i,
-		0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i,
-		0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i,
-		0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i,
-		0 + 0i, 0 + 0i,
-	}
+	//match := []complex128{
+	//	1 - 0i, 1 - 0i, 1 - 0i, 1 - 0i, 1 - 0i,
+	//	1 - 0i, 1 - 0i, 1 - 0i, 1 - 0i, 1 - 0i,
+	//	0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i,
+	//	0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i,
+	//	0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i,
+	//	0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i, 0 + 0i,
+	//	0 + 0i, 0 + 0i,
+	//}
 	//Apply Hanning Window
-	cmp1 = applyHanningWindow(matchedFilter(cmp1, match))
-	cmp2 = applyHanningWindow(matchedFilter(cmp1, match))
+	//cmp1 = applyHanningWindow(matchedFilter(cmp1, match))
+	//cmp2 = applyHanningWindow(matchedFilter(cmp1, match))
 
 	// Apply FFT
 	fft1 := fft_.FFT(cmp1)
